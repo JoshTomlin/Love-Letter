@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 
 describe("App", () => {
-  it("renders the playable prototype heading", () => {
+  it("renders the clearer table heading", () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: /playable engine-first prototype/i }),
+      screen.getByRole("heading", { name: /a clearer table for following every turn/i }),
     ).toBeInTheDocument();
   });
 });
