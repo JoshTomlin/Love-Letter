@@ -1,109 +1,63 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRandomBot } from "../bots/randomBot";
+import { CARD_VALUES } from "../engine/constants";
 import { applyAction } from "../engine/applyAction";
 import { getLegalActions } from "../engine/legalActions";
 import { getPlayerView } from "../engine/playerView";
 import { createInitialGame } from "../engine/setupRound";
 import { drawCardForCurrentPlayer } from "../engine/turnFlow";
-import type { PlayerAction, PublicGameEvent, RoundPhase } from "../engine/types";
+import type {
+  Card,
+  PlayCardAction,
+  PlayerAction,
+  PublicGameEvent,
+  RoundPhase,
+} from "../engine/types";
 
 const HUMAN_PLAYER_INDEX = 0;
 
-const TURN_STEPS: Array<{ phase: RoundPhase; label: string; detail: string }> = [
-  {
-    phase: "awaiting-turn-draw",
-    label: "Draw",
-    detail: "The active player takes a second card.",
-  },
-  {
-    phase: "awaiting-card-play",
-    label: "Choose",
-    detail: "One of the two cards must be played.",
-  },
-  {
-    phase: "round-over",
-    label: "Score",
-    detail: "The winner earns a token and the table resets.",
-  },
-];
+const CARD_TEXT: Record<Card, string> = {
+  Guard: "Name a non-Guard card. A correct guess knocks the bot out.",
+  Priest: "Secretly peek at the bot's hand.",
+  Baron: "Compare hands. The lower value is eliminated.",
+  Handmaid: "You cannot be targeted until your next turn.",
+  Prince: "Target a player to discard their hand and redraw.",
+  King: "Swap hands with the bot.",
+  Countess: "No effect, but sometimes the rules force you to play it.",
+  Princess: "If this leaves your hand, you are eliminated.",
+};
 
 function playerLabel(playerId: number) {
-  return playerId === HUMAN_PLAYER_INDEX ? "You" : `Bot ${playerId}`;
+  return playerId === HUMAN_PLAYER_INDEX ? "You" : "Bot";
 }
 
 function formatReason(reason: string) {
   const descriptions: Record<string, string> = {
     "guard-correct-guess": "a correct Guard guess",
-    "baron-lower-card": "losing a Baron comparison",
+    "baron-lower-card": "losing the Baron comparison",
     "discarded-princess": "discarding the Princess",
     "last-player-standing": "being the last player standing",
-    "deck-empty": "holding the strongest hand when the deck ran out",
+    "deck-empty": "holding the stronger hand when the deck ran out",
   };
 
   return descriptions[reason] ?? reason.replace(/-/g, " ");
 }
 
-function formatPhaseLabel(phase: RoundPhase) {
+function formatPhase(phase: RoundPhase) {
   const labels: Record<RoundPhase, string> = {
-    "round-start": "Round setup",
-    "awaiting-turn-draw": "Draw step",
-    "awaiting-card-play": "Decision step",
-    "resolving-action": "Resolving action",
-    "round-over": "Round over",
+    "round-start": "Setting the table",
+    "awaiting-turn-draw": "Drawing a second card",
+    "awaiting-card-play": "Choosing a card to play",
+    "resolving-action": "Resolving the move",
+    "round-over": "Round complete",
   };
 
   return labels[phase];
 }
 
-function formatActionLabel(action: PlayerAction) {
-  if (action.type === "start-next-round") {
-    return "Start the next round";
-  }
-
-  if (action.card === "Guard") {
-    return `Play Guard and guess ${action.guess} on ${playerLabel(action.targetId ?? HUMAN_PLAYER_INDEX)}`;
-  }
-
-  if (action.targetId !== undefined) {
-    return `Play ${action.card} on ${playerLabel(action.targetId)}`;
-  }
-
-  return `Play ${action.card}`;
-}
-
-function formatActionHint(action: PlayerAction) {
-  if (action.type === "start-next-round") {
-    return "Shuffle up and let the previous round winner lead.";
-  }
-
-  const targetLabel =
-    action.targetId === undefined ? null : playerLabel(action.targetId);
-
-  switch (action.card) {
-    case "Guard":
-      return `If ${targetLabel} is holding ${action.guess}, they are eliminated.`;
-    case "Priest":
-      return `Peek at ${targetLabel}'s hidden card.`;
-    case "Baron":
-      return `Compare hands with ${targetLabel}. The lower card is eliminated.`;
-    case "Handmaid":
-      return "Stay untouchable until your next turn begins.";
-    case "Prince":
-      return `${targetLabel} discards their hand and draws a replacement.`;
-    case "King":
-      return `Swap hands with ${targetLabel}.`;
-    case "Countess":
-      return "No effect, but sometimes the rules force this play.";
-    case "Princess":
-      return "Dangerous play: Princess only stays safe in your hand.";
-    default:
-      return "";
-  }
-}
-
 function formatEvent(event: PublicGameEvent) {
   if (event.type === "turn-started") {
-    return `${playerLabel(event.playerId)} begins the turn.`;
+    return `${playerLabel(event.playerId)} started a turn.`;
   }
 
   if (event.type === "card-played") {
@@ -130,69 +84,144 @@ function createGame() {
   });
 }
 
-function getStatusCopy(
+function getStatusSummary(
   phase: RoundPhase,
-  currentPlayerName: string | undefined,
   isHumanTurn: boolean,
-  winnerId: number | null,
+  currentPlayerName: string | undefined,
+  roundWinnerId: number | null,
 ) {
   if (phase === "round-over") {
     return {
-      eyebrow: "Round complete",
+      eyebrow: "Round over",
       title:
-        winnerId === null ? "This round has ended." : `${playerLabel(winnerId)} won the round.`,
-      body: "Use the next-round button to deal fresh hands while keeping token scores.",
+        roundWinnerId === null
+          ? "The round has finished."
+          : `${playerLabel(roundWinnerId)} won the token.`,
+      body: "Start the next round to deal fresh hands and keep the score going.",
     };
   }
 
   if (phase === "awaiting-turn-draw") {
     return {
       eyebrow: `${currentPlayerName ?? "A player"} is drawing`,
-      title: "A new turn is starting.",
-      body: "Each turn begins with the active player drawing a second card before choosing one to play.",
+      title: "A turn begins with a second card.",
+      body: "Once the extra card is drawn, one of the two cards must be played immediately.",
     };
   }
 
   if (isHumanTurn) {
     return {
-      eyebrow: "Your decision",
-      title: "Choose one card to play.",
-      body: "You must play exactly one of the two cards in your hand. The other card stays with you.",
+      eyebrow: "Your turn",
+      title: "Tap one of your two cards to play it.",
+      body: "If a card needs extra input, a choice sheet will appear for the target or guess.",
     };
   }
 
   return {
-    eyebrow: `${currentPlayerName ?? "The bot"} is thinking`,
-    title: "The bot is choosing a play.",
-    body: "Watch the table and recent events to see what information the bot is acting on.",
+    eyebrow: "Bot turn",
+    title: "The bot is deciding what to play.",
+    body: "You can still inspect either discard pile while the bot thinks.",
   };
 }
 
-function getVisibleBurnSummary(cards: string[]) {
-  if (cards.length === 0) {
-    return "No face-up burned cards in this ruleset.";
+function getPlayOptions(legalActions: PlayerAction[], card: Card) {
+  return legalActions.filter(
+    (action): action is PlayCardAction =>
+      action.type === "play-card" && action.card === card,
+  );
+}
+
+function getChoiceSheetTitle(action: PlayCardAction | undefined) {
+  if (!action) {
+    return "Choose an option";
   }
 
-  return cards.join(", ");
+  switch (action.card) {
+    case "Guard":
+      return "What would you like to guess?";
+    case "Prince":
+      return "Who should the Prince target?";
+    case "Priest":
+    case "Baron":
+    case "King":
+      return "Choose the target";
+    default:
+      return "Choose an option";
+  }
+}
+
+function getChoiceLabel(action: PlayCardAction) {
+  if (action.card === "Guard") {
+    return action.guess ? `Guess ${action.guess}` : "Play Guard";
+  }
+
+  if (action.targetId !== undefined) {
+    return playerLabel(action.targetId);
+  }
+
+  return `Play ${action.card}`;
+}
+
+function getChoiceHint(action: PlayCardAction) {
+  if (action.card === "Guard") {
+    return "If the guess is right, the bot is eliminated.";
+  }
+
+  if (action.card === "Prince" && action.targetId === HUMAN_PLAYER_INDEX) {
+    return "You will discard your hand and draw a replacement.";
+  }
+
+  if (action.card === "Prince") {
+    return "The bot will discard its hand and draw a replacement.";
+  }
+
+  if (action.card === "Priest") {
+    return "Peek at the bot's hidden card.";
+  }
+
+  if (action.card === "Baron") {
+    return "Compare hands. Lower card loses.";
+  }
+
+  if (action.card === "King") {
+    return "Swap your hand with the bot's hand.";
+  }
+
+  return CARD_TEXT[action.card];
+}
+
+function getDiscardHistory(cards: Card[]) {
+  return cards.length > 0 ? cards : [];
 }
 
 export function App() {
   const [state, setState] = useState(createGame);
+  const [pendingChoices, setPendingChoices] = useState<PlayCardAction[] | null>(null);
+  const [historyPlayerId, setHistoryPlayerId] = useState<number | null>(null);
   const botRef = useRef(createRandomBot(99));
   const view = getPlayerView(state, HUMAN_PLAYER_INDEX);
   const legalActions = getLegalActions(state);
   const currentPlayer = state.players[state.currentPlayerIndex];
+  const opponent = view.players.find((player) => player.id !== HUMAN_PLAYER_INDEX) ?? null;
   const isHumanTurn =
     state.phase === "awaiting-card-play" && currentPlayer?.id === HUMAN_PLAYER_INDEX;
-  const publicEvents = [...view.log].reverse();
-  const latestEvent = publicEvents[0] ?? null;
+  const latestPublicEvent = [...view.log].reverse()[0] ?? null;
   const knownCards = Object.entries(state.players[HUMAN_PLAYER_INDEX]?.seenCards ?? {});
-  const statusCopy = getStatusCopy(
+  const statusSummary = getStatusSummary(
     state.phase,
-    currentPlayer?.name,
     isHumanTurn,
+    currentPlayer?.name,
     state.roundWinnerId,
   );
+
+  const historyCards = useMemo(() => {
+    if (historyPlayerId === null) {
+      return [];
+    }
+
+    const player = view.players.find((entry) => entry.id === historyPlayerId);
+    return getDiscardHistory(player?.discardPile ?? []);
+  }, [historyPlayerId, view.players]);
 
   useEffect(() => {
     if (state.phase !== "awaiting-turn-draw") {
@@ -223,219 +252,241 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [currentPlayer?.id, state.phase]);
 
-  function handlePlayAction(action: PlayerAction) {
+  useEffect(() => {
+    setPendingChoices(null);
+  }, [state.phase, state.roundNumber]);
+
+  function handleAction(action: PlayerAction) {
+    setPendingChoices(null);
     setState((currentState) => applyAction(currentState, action));
   }
 
-  function handleStartNextRound() {
-    setState((currentState) =>
-      applyAction(currentState, { type: "start-next-round" }),
-    );
+  function handleCardTap(card: Card) {
+    const choices = getPlayOptions(legalActions, card);
+
+    if (choices.length === 0) {
+      return;
+    }
+
+    if (choices.length === 1) {
+      handleAction(choices[0]);
+      return;
+    }
+
+    setPendingChoices(choices);
   }
 
   function handleResetGame() {
+    setPendingChoices(null);
+    setHistoryPlayerId(null);
     setState(createGame());
   }
 
   return (
-    <main className="app-shell">
-      <section className="hero-card">
-        <div className="hero-copy">
-          <p className="eyebrow">Love Letter</p>
-          <h1>A clearer table for following every turn</h1>
-          <p className="lede">
-            The rules still live in the pure engine, but the screen now explains
-            who is acting, what stage the round is in, and why each move matters.
-          </p>
+    <main className="game-shell">
+      <section className="top-bar">
+        <div>
+          <p className="bar-label">Love Letter</p>
+          <h1>Phone-first duel table</h1>
         </div>
-        <div className="hero-actions">
-          <button className="primary-button" onClick={handleResetGame} type="button">
-            Reset game
+        <button className="ghost-button" onClick={handleResetGame} type="button">
+          Reset
+        </button>
+      </section>
+
+      <section className="status-banner">
+        <p className="status-eyebrow">{statusSummary.eyebrow}</p>
+        <h2>{statusSummary.title}</h2>
+        <p className="status-copy">{statusSummary.body}</p>
+        <div className="status-chips">
+          <span className="status-chip">Round {state.roundNumber}</span>
+          <span className="status-chip">Deck {view.cardsRemaining}</span>
+          <span className="status-chip">{formatPhase(state.phase)}</span>
+        </div>
+        {latestPublicEvent && <p className="latest-event">Latest: {formatEvent(latestPublicEvent)}</p>}
+      </section>
+
+      <section className="table-surface">
+        <section className="opponent-zone">
+          <div className="zone-header">
+            <div>
+              <p className="zone-label">Opponent</p>
+              <h3>{opponent?.name ?? "Bot"}</h3>
+            </div>
+            <span className="token-badge">{opponent?.tokens ?? 0} token(s)</span>
+          </div>
+          <div className="opponent-hand" aria-label="Bot hand">
+            {Array.from({ length: opponent?.handSize ?? 0 }).map((_, index) => (
+              <div className="card-back" key={`bot-card-${index}`}>
+                <div className="card-back-inner" />
+              </div>
+            ))}
+          </div>
+          <button
+            className="pile-button"
+            onClick={() => setHistoryPlayerId(opponent?.id ?? 1)}
+            type="button"
+          >
+            <span className="pile-label">Bot discard pile</span>
+            <span className="pile-top-card">
+              {opponent?.discardPile[opponent.discardPile.length - 1] ?? "Empty"}
+            </span>
           </button>
+        </section>
+
+        <section className="center-strip">
+          <div className="info-card">
+            <p className="info-label">Round state</p>
+            <strong>{currentPlayer?.name ?? "Bot"} is active</strong>
+            <span>
+              {state.visibleBurnedCards.length > 0
+                ? `Face-up burns: ${state.visibleBurnedCards.join(", ")}`
+                : "No face-up burned cards"}
+            </span>
+          </div>
+          <div className="info-card">
+            <p className="info-label">What you know</p>
+            {knownCards.length > 0 ? (
+              <span>
+                {knownCards
+                  .map(([playerId, card]) => `${playerLabel(Number(playerId))}: ${card}`)
+                  .join(" | ")}
+              </span>
+            ) : (
+              <span>No revealed opponent card remembered yet.</span>
+            )}
+          </div>
+        </section>
+
+        <section className="player-zone">
+          <button
+            className="pile-button player-pile"
+            onClick={() => setHistoryPlayerId(HUMAN_PLAYER_INDEX)}
+            type="button"
+          >
+            <span className="pile-label">Your discard pile</span>
+            <span className="pile-top-card">
+              {view.players[HUMAN_PLAYER_INDEX]?.discardPile[view.players[HUMAN_PLAYER_INDEX].discardPile.length - 1] ?? "Empty"}
+            </span>
+          </button>
+
+          <div className="zone-header">
+            <div>
+              <p className="zone-label">Your hand</p>
+              <h3>Tap a card to play it</h3>
+            </div>
+            <span className="token-badge">{view.players[HUMAN_PLAYER_INDEX]?.tokens ?? 0} token(s)</span>
+          </div>
+
+          <div className="player-hand" aria-label="Your hand">
+            {view.myHand.map((card, index) => {
+              const choices = getPlayOptions(legalActions, card);
+              const playable = isHumanTurn && choices.length > 0;
+
+              return (
+                <button
+                  className={`hand-card ${playable ? "hand-card-playable" : "hand-card-disabled"}`}
+                  disabled={!playable}
+                  key={`${card}-${index}`}
+                  onClick={() => handleCardTap(card)}
+                  type="button"
+                >
+                  <span className="hand-card-value">{CARD_VALUES[card]}</span>
+                  <span className="hand-card-name">{card}</span>
+                  <span className="hand-card-text">{CARD_TEXT[card]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="tap-help">
+            {isHumanTurn
+              ? "Tap a card. If it needs a target or guess, a choice sheet will slide up."
+              : state.phase === "round-over"
+                ? "Start the next round when you're ready."
+                : "Wait for the bot's move, then your next two-card hand will appear here."}
+          </p>
+
           {state.phase === "round-over" && (
             <button
-              className="secondary-button"
-              onClick={handleStartNextRound}
+              className="primary-button"
+              onClick={() => handleAction({ type: "start-next-round" })}
               type="button"
             >
               Start next round
             </button>
           )}
-        </div>
+        </section>
       </section>
 
-      <section className="status-layout">
-        <article className="status-card panel-accent">
-          <p className="status-eyebrow">{statusCopy.eyebrow}</p>
-          <h2>{statusCopy.title}</h2>
-          <p className="status-body">{statusCopy.body}</p>
-          {latestEvent && (
-            <p className="status-latest">
-              <strong>Latest table update:</strong> {formatEvent(latestEvent)}
-            </p>
-          )}
-        </article>
-
-        <article className="steps-card">
-          <h2>Turn flow</h2>
-          <ol className="step-list">
-            {TURN_STEPS.map((step) => {
-              const isActive = state.phase === step.phase;
-              const isComplete =
-                state.phase === "awaiting-card-play" && step.phase === "awaiting-turn-draw";
-              const isScored = state.phase === "round-over" && step.phase !== "round-over";
-
-              return (
-                <li
-                  className={`step-item ${isActive ? "step-item-active" : ""} ${
-                    isComplete || isScored ? "step-item-complete" : ""
-                  }`}
-                  key={step.label}
-                >
-                  <span className="step-marker" aria-hidden="true" />
-                  <div>
-                    <strong>{step.label}</strong>
-                    <p>{step.detail}</p>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </article>
-      </section>
-
-      <section className="board-grid">
-        <article className="panel panel-wide">
-          <div className="section-heading">
-            <div>
-              <p className="section-kicker">Your view</p>
-              <h2>Your hand</h2>
-            </div>
-            <span className="phase-pill">{formatPhaseLabel(state.phase)}</span>
-          </div>
-          <div className="hand-card-row">
-            {view.myHand.map((card) => (
-              <div className="hand-card" key={card}>
-                <span className="hand-card-label">{card}</span>
+      {pendingChoices && pendingChoices.length > 0 && (
+        <div className="overlay" role="presentation">
+          <section aria-modal="true" className="bottom-sheet" role="dialog">
+            <div className="sheet-header">
+              <div>
+                <p className="zone-label">Card choice</p>
+                <h3>{getChoiceSheetTitle(pendingChoices[0])}</h3>
               </div>
-            ))}
-          </div>
-          <p className="support-copy">
-            {isHumanTurn
-              ? "Choose the card you want to reveal. The other card remains hidden in your hand."
-              : "Your hand stays visible here so you can keep your options in mind while the turn advances."}
-          </p>
-        </article>
-
-        <article className="panel">
-          <h2>Choose your play</h2>
-          {isHumanTurn ? (
-            <div className="action-list">
-              {legalActions.map((action) => (
+              <button
+                aria-label="Close card choices"
+                className="icon-button"
+                onClick={() => setPendingChoices(null)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+            <div className="sheet-list">
+              {pendingChoices.map((action, index) => (
                 <button
-                  className="action-button"
-                  key={formatActionLabel(action)}
-                  onClick={() => handlePlayAction(action)}
+                  className="sheet-option"
+                  key={`${action.card}-${action.targetId ?? "self"}-${action.guess ?? "none"}-${index}`}
+                  onClick={() => handleAction(action)}
                   type="button"
                 >
-                  <strong>{formatActionLabel(action)}</strong>
-                  <span>{formatActionHint(action)}</span>
+                  <strong>{getChoiceLabel(action)}</strong>
+                  <span>{getChoiceHint(action)}</span>
                 </button>
               ))}
             </div>
-          ) : (
-            <p className="status-copy">
-              {state.phase === "round-over"
-                ? "This round is finished. Start the next round when you're ready."
-                : `${currentPlayer?.name ?? "Bot"} is the active player right now.`}
-            </p>
-          )}
-        </article>
+          </section>
+        </div>
+      )}
 
-        <article className="panel">
-          <h2>Round snapshot</h2>
-          <dl className="facts">
-            <div>
-              <dt>Active player</dt>
-              <dd>{currentPlayer?.name}</dd>
-            </div>
-            <div>
-              <dt>Current step</dt>
-              <dd>{formatPhaseLabel(state.phase)}</dd>
-            </div>
-            <div>
-              <dt>Cards left in deck</dt>
-              <dd>{view.cardsRemaining}</dd>
-            </div>
-            <div>
-              <dt>Round number</dt>
-              <dd>{state.roundNumber}</dd>
-            </div>
-            <div>
-              <dt>Face-up burns</dt>
-              <dd>{getVisibleBurnSummary(state.visibleBurnedCards)}</dd>
-            </div>
-            <div>
-              <dt>Winner</dt>
-              <dd>
-                {state.roundWinnerId === null ? "Still in progress" : playerLabel(state.roundWinnerId)}
-              </dd>
-            </div>
-          </dl>
-        </article>
-
-        <article className="panel">
-          <h2>Players at the table</h2>
-          <div className="player-stack">
-            {view.players.map((player, index) => (
-              <section
-                className={`player-card ${index === state.currentPlayerIndex ? "player-card-active" : ""}`}
-                key={player.id}
+      {historyPlayerId !== null && (
+        <div className="overlay" role="presentation">
+          <section aria-modal="true" className="bottom-sheet" role="dialog">
+            <div className="sheet-header">
+              <div>
+                <p className="zone-label">Discard history</p>
+                <h3>{playerLabel(historyPlayerId)} played</h3>
+              </div>
+              <button
+                aria-label="Close discard history"
+                className="icon-button"
+                onClick={() => setHistoryPlayerId(null)}
+                type="button"
               >
-                <div className="player-card-header">
-                  <strong>{player.name}</strong>
-                  <span>{player.tokens} token(s)</span>
-                </div>
-                <p className="player-state">
-                  {player.eliminated ? "Eliminated" : player.protected ? "Protected by Handmaid" : "Still in the round"}
-                </p>
-                <p className="player-meta">
-                  Hand: {player.id === HUMAN_PLAYER_INDEX ? view.myHand.join(", ") : `${player.handSize} hidden card`}
-                </p>
-                <p className="player-meta">
-                  Discards: {player.discardPile.length ? player.discardPile.join(", ") : "None yet"}
-                </p>
-              </section>
-            ))}
-          </div>
-        </article>
-
-        <article className="panel">
-          <h2>Your notes</h2>
-          {knownCards.length > 0 ? (
-            <ul className="note-list">
-              {knownCards.map(([playerId, card]) => (
-                <li key={playerId}>
-                  You previously saw that {playerLabel(Number(playerId))} was holding {card}.
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="status-copy">
-              You have not privately seen any opponent cards yet.
-            </p>
-          )}
-        </article>
-
-        <article className="panel panel-wide">
-          <h2>Recent events</h2>
-          <ul className="event-list">
-            {publicEvents.map((event, index) => (
-              <li key={`${event.type}-${index}`}>{formatEvent(event)}</li>
-            ))}
-          </ul>
-        </article>
-      </section>
+                Close
+              </button>
+            </div>
+            <div className="history-list">
+              {historyCards.length > 0 ? (
+                historyCards.map((card, index) => (
+                  <div className="history-item" key={`${card}-${index}`}>
+                    <span>{index + 1}.</span>
+                    <strong>{card}</strong>
+                    <span>{CARD_TEXT[card]}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-copy">No cards have been discarded yet.</p>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
+
