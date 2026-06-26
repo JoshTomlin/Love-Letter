@@ -8,6 +8,7 @@ import { createInitialGame } from "../engine/setupRound";
 import { drawCardForCurrentPlayer } from "../engine/turnFlow";
 import type {
   Card,
+  GameState,
   PlayCardAction,
   PlayerAction,
   PublicGameEvent,
@@ -15,6 +16,9 @@ import type {
 } from "../engine/types";
 
 const HUMAN_PLAYER_INDEX = 0;
+const DRAW_CUE_MS = 950;
+const PLAY_CUE_MS = 1050;
+const RESOLVE_CUE_MS = 1350;
 
 const CARD_TEXT: Record<Card, string> = {
   Guard: "Name a card. Correct guesses eliminate.",
@@ -28,6 +32,18 @@ const CARD_TEXT: Record<Card, string> = {
 };
 
 type CardPlayedEvent = Extract<PublicGameEvent, { type: "card-played" }>;
+type CueTone = "neutral" | "success" | "danger";
+type TableCue = {
+  kind: "draw" | "play" | "resolve" | "win";
+  actorId?: number;
+  card?: Card;
+  targetId?: number;
+  title: string;
+  detail: string;
+  speech?: string;
+  response?: string;
+  tone?: CueTone;
+};
 
 function playerLabel(playerId: number) {
   return playerId === HUMAN_PLAYER_INDEX ? "You" : "Bot";
@@ -148,6 +164,25 @@ function getLastPlayedEvent(log: PublicGameEvent[]) {
   );
 }
 
+function getNewPublicEvents(before: GameState, after: GameState) {
+  return after.log.slice(before.log.length).filter((event): event is PublicGameEvent => {
+    return event.type !== "card-drawn" && event.type !== "card-revealed";
+  });
+}
+
+function getNewEliminatedPlayers(before: GameState, after: GameState) {
+  return after.players.filter((player) => {
+    const previous = before.players.find((candidate) => candidate.id === player.id);
+    return player.eliminated && !previous?.eliminated;
+  });
+}
+
+function getPrivateReveal(before: GameState, after: GameState, viewerId: number) {
+  return after.log.slice(before.log.length).find((event) => {
+    return event.type === "card-revealed" && event.viewerId === viewerId;
+  });
+}
+
 function getChoiceSheetTitle(action: PlayCardAction | undefined) {
   if (!action) {
     return "Choose";
@@ -193,6 +228,186 @@ function getChoiceHint(action: PlayCardAction) {
   }
 
   return CARD_TEXT[action.card];
+}
+
+function getPlayCue(action: PlayCardAction): TableCue {
+  const actor = playerLabel(action.playerId);
+  const target =
+    action.targetId === undefined ? null : playerLabel(action.targetId);
+
+  if (action.card === "Guard" && action.guess) {
+    return {
+      kind: "play",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: `${actor} plays Guard`,
+      detail: `${target ?? "Opponent"} is challenged.`,
+      speech: `I guess ${action.guess}.`,
+    };
+  }
+
+  return {
+    kind: "play",
+    actorId: action.playerId,
+    targetId: action.targetId,
+    card: action.card,
+    title: `${actor} plays ${action.card}`,
+    detail: target ? `${target} is targeted.` : CARD_TEXT[action.card],
+  };
+}
+
+function getResolveCue(before: GameState, after: GameState, action: PlayCardAction): TableCue {
+  const actor = playerLabel(action.playerId);
+  const target = action.targetId === undefined ? null : playerLabel(action.targetId);
+  const eliminated = getNewEliminatedPlayers(before, after);
+  const eliminatedTarget = eliminated.find((player) => player.id === action.targetId);
+  const eliminatedActor = eliminated.find((player) => player.id === action.playerId);
+  const newEvents = getNewPublicEvents(before, after);
+
+  if (action.card === "Guard") {
+    const correct = Boolean(eliminatedTarget);
+
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: `${actor} guessed ${action.guess}`,
+      detail: correct
+        ? `${target ?? "Target"} had ${action.guess}.`
+        : `${target ?? "Target"} says no. ${action.guess} was wrong.`,
+      speech: `I guess ${action.guess}.`,
+      response: correct ? "Correct." : "Wrong.",
+      tone: correct ? "success" : "neutral",
+    };
+  }
+
+  if (action.card === "Priest") {
+    const reveal = getPrivateReveal(before, after, action.playerId);
+
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: `${actor} uses Priest`,
+      detail:
+        action.playerId === HUMAN_PLAYER_INDEX && reveal?.type === "card-revealed"
+          ? `You saw ${playerLabel(reveal.targetId)} holding ${reveal.card}.`
+          : `${actor} looked at ${target ?? "the target"}'s hand.`,
+      tone: "success",
+    };
+  }
+
+  if (action.card === "Baron") {
+    const eliminatedPlayer = eliminatedTarget ?? eliminatedActor;
+
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: "Baron comparison",
+      detail: eliminatedPlayer
+        ? `${playerLabel(eliminatedPlayer.id)} had the lower card.`
+        : "The cards matched. Nobody is eliminated.",
+      response: eliminatedPlayer ? `${playerLabel(eliminatedPlayer.id)} is out.` : "Tie.",
+      tone: eliminatedPlayer ? "danger" : "neutral",
+    };
+  }
+
+  if (action.card === "Handmaid") {
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      card: action.card,
+      title: `${actor} is protected`,
+      detail: "Handmaid blocks targeting until that player's next turn.",
+      response: "Protected.",
+      tone: "success",
+    };
+  }
+
+  if (action.card === "Prince") {
+    const princessDiscard = newEvents.some(
+      (event) => event.type === "player-eliminated" && event.reason === "discarded-princess",
+    );
+
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: `${target ?? "Target"} discards`,
+      detail: princessDiscard
+        ? "Princess was discarded, so the target is eliminated."
+        : `${target ?? "Target"} discarded and drew a replacement.`,
+      response: princessDiscard ? "Princess." : "Redrawn.",
+      tone: princessDiscard ? "danger" : "success",
+    };
+  }
+
+  if (action.card === "King") {
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      targetId: action.targetId,
+      card: action.card,
+      title: "Hands traded",
+      detail: `${actor} and ${target ?? "the target"} swapped hands.`,
+      response: "Swapped.",
+      tone: "success",
+    };
+  }
+
+  if (action.card === "Princess") {
+    return {
+      kind: "resolve",
+      actorId: action.playerId,
+      card: action.card,
+      title: `${actor} discarded Princess`,
+      detail: "Princess leaving the hand eliminates that player.",
+      response: `${actor} is out.`,
+      tone: "danger",
+    };
+  }
+
+  return {
+    kind: "resolve",
+    actorId: action.playerId,
+    card: action.card,
+    title: `${action.card} resolves`,
+    detail: CARD_TEXT[action.card],
+    response: "Resolved.",
+    tone: "neutral",
+  };
+}
+
+function getWinCue(state: GameState): TableCue {
+  const winnerId = state.gameWinnerId ?? state.roundWinnerId ?? HUMAN_PLAYER_INDEX;
+  const winner = playerLabel(winnerId);
+  const tokensToWin = TOKENS_TO_WIN_BY_RULESET[state.ruleset];
+
+  if (state.phase === "game-over") {
+    return {
+      kind: "win",
+      actorId: winnerId,
+      title: `${winner} wins the game`,
+      detail: `${winner} reached ${tokensToWin} tokens.`,
+      response: "Game over.",
+      tone: "success",
+    };
+  }
+
+  return {
+    kind: "win",
+    actorId: winnerId,
+    title: `${winner} wins the round`,
+    detail: "A favor token is awarded.",
+    response: "+1 token",
+    tone: "success",
+  };
 }
 
 function CardIllustration({ card }: { card: Card }) {
@@ -335,6 +550,10 @@ export function App() {
   const [state, setState] = useState(createGame);
   const [pendingChoices, setPendingChoices] = useState<PlayCardAction[] | null>(null);
   const [historyPlayerId, setHistoryPlayerId] = useState<number | null>(null);
+  const [tableCue, setTableCue] = useState<TableCue | null>(null);
+  const [isSequencing, setIsSequencing] = useState(false);
+  const sequenceInProgressRef = useRef(false);
+  const timeoutsRef = useRef<number[]>([]);
   const botRef = useRef(createRandomBot(99));
   const view = getPlayerView(state, HUMAN_PLAYER_INDEX);
   const legalActions = getLegalActions(state);
@@ -356,6 +575,18 @@ export function App() {
     state.roundWinnerId,
     state.gameWinnerId,
   );
+  const stageCard = tableCue?.card ?? lastPlayedEvent?.card ?? null;
+  const stageActorId = tableCue?.actorId ?? lastPlayedEvent?.playerId ?? null;
+  const stageLabel = tableCue
+    ? tableCue.kind === "draw"
+      ? `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} draws`
+      : tableCue.kind === "win"
+        ? "Round result"
+        : `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} ${tableCue.kind === "play" ? "plays" : "resolves"}`
+    : lastPlayedEvent
+      ? `${playerLabel(lastPlayedEvent.playerId)} played`
+      : "Opening deal";
+  const tableCueTone = tableCue?.tone ?? "neutral";
 
   const historyCards = useMemo(() => {
     if (historyPlayerId === null) {
@@ -366,13 +597,94 @@ export function App() {
     return player?.discardPile ?? [];
   }, [historyPlayerId, view.players]);
 
+  function clearQueuedTimeouts() {
+    for (const timeoutId of timeoutsRef.current) {
+      window.clearTimeout(timeoutId);
+    }
+
+    timeoutsRef.current = [];
+  }
+
+  function queueTimeout(callback: () => void, delay: number) {
+    const timeoutId = window.setTimeout(() => {
+      timeoutsRef.current = timeoutsRef.current.filter((id) => id !== timeoutId);
+      callback();
+    }, delay);
+
+    timeoutsRef.current.push(timeoutId);
+  }
+
+  function startSequence() {
+    clearQueuedTimeouts();
+    sequenceInProgressRef.current = true;
+    setIsSequencing(true);
+  }
+
+  function finishSequence(nextCue: TableCue | null = null) {
+    sequenceInProgressRef.current = false;
+    setIsSequencing(false);
+    setTableCue(nextCue);
+  }
+
+  function finishActionSequence(nextState: GameState) {
+    if (nextState.phase === "round-over" || nextState.phase === "game-over") {
+      queueTimeout(() => {
+        finishSequence(getWinCue(nextState));
+      }, RESOLVE_CUE_MS);
+      return;
+    }
+
+    queueTimeout(() => {
+      finishSequence(null);
+    }, RESOLVE_CUE_MS);
+  }
+
+  function playActionWithSequence(sourceState: GameState, action: PlayCardAction) {
+    startSequence();
+    setPendingChoices(null);
+    setTableCue(getPlayCue(action));
+
+    queueTimeout(() => {
+      const nextState = applyAction(sourceState, action);
+      setState(nextState);
+      setTableCue(getResolveCue(sourceState, nextState, action));
+      finishActionSequence(nextState);
+    }, PLAY_CUE_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      clearQueuedTimeouts();
+    };
+  }, []);
+
   useEffect(() => {
     if (state.phase !== "awaiting-turn-draw") {
       return;
     }
 
-    setState((currentState) => drawCardForCurrentPlayer(currentState));
-  }, [state.phase]);
+    if (sequenceInProgressRef.current) {
+      return;
+    }
+
+    const activePlayer = state.players[state.currentPlayerIndex];
+    if (!activePlayer) {
+      return;
+    }
+
+    startSequence();
+    setTableCue({
+      kind: "draw",
+      actorId: activePlayer.id,
+      title: `${playerLabel(activePlayer.id)} draws`,
+      detail: "A card slides from the deck into the hand.",
+    });
+
+    queueTimeout(() => {
+      setState((currentState) => drawCardForCurrentPlayer(currentState));
+      finishSequence(null);
+    }, DRAW_CUE_MS);
+  }, [isSequencing, state]);
 
   useEffect(() => {
     if (state.phase !== "awaiting-card-play") {
@@ -383,28 +695,39 @@ export function App() {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      setState((currentState) => {
-        const botView = getPlayerView(currentState, currentState.currentPlayerIndex);
-        const botActions = getLegalActions(currentState);
-        const botAction = botRef.current.chooseAction(botView, botActions);
-        return applyAction(currentState, botAction);
-      });
-    }, 950);
+    if (sequenceInProgressRef.current) {
+      return;
+    }
 
-    return () => window.clearTimeout(timer);
-  }, [currentPlayer?.id, state.phase]);
+    const botView = getPlayerView(state, state.currentPlayerIndex);
+    const botActions = getLegalActions(state);
+    const botAction = botRef.current.chooseAction(botView, botActions);
+    playActionWithSequence(state, botAction as PlayCardAction);
+  }, [currentPlayer?.id, isSequencing, state]);
 
   useEffect(() => {
     setPendingChoices(null);
   }, [state.phase, state.roundNumber]);
 
   function handleAction(action: PlayerAction) {
-    setPendingChoices(null);
-    setState((currentState) => applyAction(currentState, action));
+    if (action.type === "start-next-round") {
+      clearQueuedTimeouts();
+      sequenceInProgressRef.current = false;
+      setIsSequencing(false);
+      setTableCue(null);
+      setPendingChoices(null);
+      setState((currentState) => applyAction(currentState, action));
+      return;
+    }
+
+    playActionWithSequence(state, action);
   }
 
   function handleCardTap(card: Card) {
+    if (isSequencing) {
+      return;
+    }
+
     const choices = getPlayOptions(legalActions, card);
 
     if (choices.length === 0) {
@@ -420,6 +743,10 @@ export function App() {
   }
 
   function handleResetGame() {
+    clearQueuedTimeouts();
+    sequenceInProgressRef.current = false;
+    setIsSequencing(false);
+    setTableCue(null);
     setPendingChoices(null);
     setHistoryPlayerId(null);
     setState(createGame());
@@ -446,7 +773,11 @@ export function App() {
         </div>
       </header>
 
-      <section className={`table-surface ${isBotThinking ? "table-surface-bot-thinking" : ""}`}>
+      <section
+        className={`table-surface ${isBotThinking ? "table-surface-bot-thinking" : ""} ${
+          tableCue ? `table-surface-cue table-surface-cue-${tableCue.kind}` : ""
+        }`}
+      >
         <section className="opponent-zone" aria-label="Opponent area">
           <div className="zone-row">
             <div>
@@ -473,27 +804,53 @@ export function App() {
           <div className="deck-area">
             <CardBack stacked />
             <span>{view.cardsRemaining}</span>
-          </div>
-
-          <div className="turn-stage" key={lastPlayedEvent ? `${lastPlayedEvent.playerId}-${lastPlayedEvent.card}-${view.log.length}` : "empty"}>
-            {lastPlayedEvent ? (
-              <>
-                <span className="stage-label">{playerLabel(lastPlayedEvent.playerId)} played</span>
-                <CardFace card={lastPlayedEvent.card} size="small" />
-              </>
-            ) : (
-              <>
-                <span className="stage-label">Opening deal</span>
-                <div className="empty-stage">No cards played</div>
-              </>
+            {tableCue?.kind === "draw" && (
+              <div
+                className={`draw-runner ${
+                  tableCue.actorId === HUMAN_PLAYER_INDEX ? "draw-runner-you" : "draw-runner-bot"
+                }`}
+                aria-hidden="true"
+              >
+                <CardBack />
+              </div>
             )}
           </div>
 
-          <div className="prompt-panel">
-            <strong>{prompt.title}</strong>
-            <span>{prompt.detail}</span>
-            {latestPublicEvent && <small>{formatEvent(latestPublicEvent)}</small>}
+          <div
+            className={`turn-stage turn-stage-${tableCue?.kind ?? "idle"} turn-stage-${tableCueTone}`}
+            key={`${tableCue?.kind ?? "idle"}-${tableCue?.title ?? stageCard ?? "empty"}-${view.log.length}`}
+          >
+            <span className="stage-label">{stageLabel}</span>
+            {tableCue?.kind === "draw" ? (
+              <CardBack />
+            ) : stageCard ? (
+              <CardFace card={stageCard} size="small" />
+            ) : (
+              <div className="empty-stage">No cards played</div>
+            )}
+            {stageActorId !== null && tableCue?.kind !== "draw" && (
+              <span className="stage-owner">{playerLabel(stageActorId)}</span>
+            )}
           </div>
+
+          <div className={`prompt-panel prompt-panel-${tableCueTone}`}>
+            <strong>{tableCue?.title ?? prompt.title}</strong>
+            <span>{tableCue?.detail ?? prompt.detail}</span>
+            {tableCue?.response && <em>{tableCue.response}</em>}
+            {!tableCue && latestPublicEvent && <small>{formatEvent(latestPublicEvent)}</small>}
+            {tableCue?.kind === "win" && <div className="win-flash" aria-hidden="true" />}
+          </div>
+
+          {tableCue?.speech && (
+            <div className="cue-bubbles">
+              <span className="speech-bubble speech-bubble-actor">{tableCue.speech}</span>
+              {tableCue.response && (
+                <span className={`speech-bubble speech-bubble-response speech-bubble-${tableCueTone}`}>
+                  {tableCue.response}
+                </span>
+              )}
+            </div>
+          )}
 
           {knownCards.length > 0 && (
             <div className="intel-strip">
@@ -519,7 +876,7 @@ export function App() {
           <div className="player-hand" aria-label="Your hand">
             {view.myHand.map((card, index) => {
               const choices = getPlayOptions(legalActions, card);
-              const playable = isHumanTurn && choices.length > 0;
+              const playable = isHumanTurn && choices.length > 0 && !isSequencing;
 
               return (
                 <CardFace
@@ -533,7 +890,7 @@ export function App() {
           </div>
 
           <div className="action-row">
-            {state.phase === "round-over" && (
+            {state.phase === "round-over" && !isSequencing && (
               <button
                 className="primary-button"
                 onClick={() => handleAction({ type: "start-next-round" })}
@@ -542,7 +899,7 @@ export function App() {
                 Next round
               </button>
             )}
-            {state.phase === "game-over" && (
+            {state.phase === "game-over" && !isSequencing && (
               <button className="primary-button" onClick={handleResetGame} type="button">
                 New game
               </button>
