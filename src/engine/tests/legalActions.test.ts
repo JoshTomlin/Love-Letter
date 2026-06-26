@@ -32,6 +32,7 @@ function createState(hand: GameState["players"][number]["hand"]): GameState {
     phase: "awaiting-card-play",
     roundNumber: 1,
     roundWinnerId: null,
+    gameWinnerId: null,
     ruleset: "classic-2p",
     pendingAction: null,
     log: [],
@@ -57,5 +58,13 @@ describe("getLegalActions", () => {
     );
 
     expect(actions).toHaveLength(7);
+  });
+
+  it("offers no actions after the game is over", () => {
+    const state = createState(["Guard", "Priest"]);
+    state.phase = "game-over";
+    state.gameWinnerId = 0;
+
+    expect(getLegalActions(state)).toEqual([]);
   });
 });

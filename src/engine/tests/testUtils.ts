@@ -25,6 +25,7 @@ export function createTestState(options: CreateTestStateOptions = {}): GameState
     phase: options.phase ?? "awaiting-card-play",
     roundNumber: 1,
     roundWinnerId: null,
+    gameWinnerId: null,
     ruleset: options.ruleset ?? "classic-2p",
     pendingAction: null,
     log: [],

@@ -18,7 +18,8 @@ export type RoundPhase =
   | "awaiting-turn-draw"
   | "awaiting-card-play"
   | "resolving-action"
-  | "round-over";
+  | "round-over"
+  | "game-over";
 
 export type PlayerState = {
   id: number;
@@ -78,6 +79,7 @@ export type GameState = {
   phase: RoundPhase;
   roundNumber: number;
   roundWinnerId: number | null;
+  gameWinnerId: number | null;
   ruleset: Ruleset;
   pendingAction: PendingAction;
   log: GameEvent[];

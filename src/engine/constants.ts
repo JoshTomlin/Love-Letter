@@ -35,3 +35,9 @@ export const RULESET_BY_PLAYER_COUNT: Record<number, Ruleset> = {
   3: "classic-3p",
   4: "classic-4p",
 };
+
+export const TOKENS_TO_WIN_BY_RULESET: Record<Ruleset, number> = {
+  "classic-2p": 7,
+  "classic-3p": 5,
+  "classic-4p": 4,
+};

@@ -1,4 +1,4 @@
-import { CARD_VALUES } from "./constants";
+import { CARD_VALUES, TOKENS_TO_WIN_BY_RULESET } from "./constants";
 import { getLegalActions } from "./legalActions";
 import { createNextRound } from "./setupRound";
 import type { Card, GameState, PlayCardAction, PlayerAction, PlayerState } from "./types";
@@ -103,8 +103,9 @@ function resolveCardEffect(state: GameState, action: PlayCardAction): GameState 
     case "King":
       return resolveKing(state, action);
     case "Countess":
-    case "Princess":
       return state;
+    case "Princess":
+      return eliminatePlayer(state, action.playerId, "discarded-princess");
     default:
       return assertNever(action.card);
   }
@@ -323,12 +324,16 @@ function finishRound(state: GameState, winnerId: number, reason: string): GameSt
       ? { ...player, tokens: player.tokens + 1 }
       : player,
   );
+  const winner = players.find((player) => player.id === winnerId);
+  const tokensToWin = TOKENS_TO_WIN_BY_RULESET[state.ruleset];
+  const gameWinnerId = winner && winner.tokens >= tokensToWin ? winnerId : null;
 
   return {
     ...state,
     players,
     roundWinnerId: winnerId,
-    phase: "round-over",
+    gameWinnerId,
+    phase: gameWinnerId === null ? "round-over" : "game-over",
     pendingAction: null,
     log: [
       ...state.log,

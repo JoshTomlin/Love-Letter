@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRandomBot } from "../bots/randomBot";
-import { CARD_VALUES } from "../engine/constants";
+import { CARD_VALUES, TOKENS_TO_WIN_BY_RULESET } from "../engine/constants";
 import { applyAction } from "../engine/applyAction";
 import { getLegalActions } from "../engine/legalActions";
 import { getPlayerView } from "../engine/playerView";
@@ -17,27 +17,33 @@ import type {
 const HUMAN_PLAYER_INDEX = 0;
 
 const CARD_TEXT: Record<Card, string> = {
-  Guard: "Name a non-Guard card. A correct guess knocks the bot out.",
-  Priest: "Secretly peek at the bot's hand.",
-  Baron: "Compare hands. The lower value is eliminated.",
-  Handmaid: "You cannot be targeted until your next turn.",
-  Prince: "Target a player to discard their hand and redraw.",
-  King: "Swap hands with the bot.",
-  Countess: "No effect, but sometimes the rules force you to play it.",
-  Princess: "If this leaves your hand, you are eliminated.",
+  Guard: "Name a card. Correct guesses eliminate.",
+  Priest: "Look at the bot's hand.",
+  Baron: "Compare hands. Low card is out.",
+  Handmaid: "Protected until your next turn.",
+  Prince: "Force a discard and redraw.",
+  King: "Trade hands with the bot.",
+  Countess: "Must play with King or Prince.",
+  Princess: "Discarding her eliminates you.",
 };
+
+type CardPlayedEvent = Extract<PublicGameEvent, { type: "card-played" }>;
 
 function playerLabel(playerId: number) {
   return playerId === HUMAN_PLAYER_INDEX ? "You" : "Bot";
 }
 
+function cardClass(card: Card) {
+  return card.toLowerCase();
+}
+
 function formatReason(reason: string) {
   const descriptions: Record<string, string> = {
-    "guard-correct-guess": "a correct Guard guess",
-    "baron-lower-card": "losing the Baron comparison",
-    "discarded-princess": "discarding the Princess",
-    "last-player-standing": "being the last player standing",
-    "deck-empty": "holding the stronger hand when the deck ran out",
+    "guard-correct-guess": "correct Guard guess",
+    "baron-lower-card": "lower Baron card",
+    "discarded-princess": "discarded Princess",
+    "last-player-standing": "last player standing",
+    "deck-empty": "highest final hand",
   };
 
   return descriptions[reason] ?? reason.replace(/-/g, " ");
@@ -45,11 +51,12 @@ function formatReason(reason: string) {
 
 function formatPhase(phase: RoundPhase) {
   const labels: Record<RoundPhase, string> = {
-    "round-start": "Setting the table",
-    "awaiting-turn-draw": "Drawing a second card",
-    "awaiting-card-play": "Choosing a card to play",
-    "resolving-action": "Resolving the move",
-    "round-over": "Round complete",
+    "round-start": "Deal",
+    "awaiting-turn-draw": "Draw",
+    "awaiting-card-play": "Play",
+    "resolving-action": "Resolve",
+    "round-over": "Round",
+    "game-over": "Game",
   };
 
   return labels[phase];
@@ -57,7 +64,7 @@ function formatPhase(phase: RoundPhase) {
 
 function formatEvent(event: PublicGameEvent) {
   if (event.type === "turn-started") {
-    return `${playerLabel(event.playerId)} started a turn.`;
+    return `${playerLabel(event.playerId)} started.`;
   }
 
   if (event.type === "card-played") {
@@ -67,14 +74,14 @@ function formatEvent(event: PublicGameEvent) {
   }
 
   if (event.type === "player-eliminated") {
-    return `${playerLabel(event.playerId)} was eliminated by ${formatReason(event.reason)}.`;
+    return `${playerLabel(event.playerId)} eliminated: ${formatReason(event.reason)}.`;
   }
 
   if (event.type === "token-awarded") {
-    return `${playerLabel(event.playerId)} earned a token.`;
+    return `${playerLabel(event.playerId)} gained a token.`;
   }
 
-  return `${playerLabel(event.winnerId)} won the round by ${formatReason(event.reason)}.`;
+  return `${playerLabel(event.winnerId)} won by ${formatReason(event.reason)}.`;
 }
 
 function createGame() {
@@ -84,43 +91,47 @@ function createGame() {
   });
 }
 
-function getStatusSummary(
+function getPrompt(
   phase: RoundPhase,
   isHumanTurn: boolean,
   currentPlayerName: string | undefined,
   roundWinnerId: number | null,
+  gameWinnerId: number | null,
 ) {
+  if (phase === "game-over") {
+    return {
+      title: `${playerLabel(gameWinnerId ?? HUMAN_PLAYER_INDEX)} wins the game`,
+      detail: "Final token reached.",
+    };
+  }
+
   if (phase === "round-over") {
     return {
-      eyebrow: "Round over",
       title:
         roundWinnerId === null
-          ? "The round has finished."
-          : `${playerLabel(roundWinnerId)} won the token.`,
-      body: "Start the next round to deal fresh hands and keep the score going.",
+          ? "Round complete"
+          : `${playerLabel(roundWinnerId)} wins the round`,
+      detail: "Deal the next round.",
     };
   }
 
   if (phase === "awaiting-turn-draw") {
     return {
-      eyebrow: `${currentPlayerName ?? "A player"} is drawing`,
-      title: "A turn begins with a second card.",
-      body: "Once the extra card is drawn, one of the two cards must be played immediately.",
+      title: `${currentPlayerName ?? "Player"} draws`,
+      detail: "Second card enters the hand.",
     };
   }
 
   if (isHumanTurn) {
     return {
-      eyebrow: "Your turn",
-      title: "Tap one of your two cards to play it.",
-      body: "If a card needs extra input, a choice sheet will appear for the target or guess.",
+      title: "Your move",
+      detail: "Choose one card.",
     };
   }
 
   return {
-    eyebrow: "Bot turn",
-    title: "The bot is deciding what to play.",
-    body: "You can still inspect either discard pile while the bot thinks.",
+    title: "Bot thinking",
+    detail: "Watch the table.",
   };
 }
 
@@ -131,67 +142,193 @@ function getPlayOptions(legalActions: PlayerAction[], card: Card) {
   );
 }
 
+function getLastPlayedEvent(log: PublicGameEvent[]) {
+  return [...log].reverse().find(
+    (event): event is CardPlayedEvent => event.type === "card-played",
+  );
+}
+
 function getChoiceSheetTitle(action: PlayCardAction | undefined) {
   if (!action) {
-    return "Choose an option";
+    return "Choose";
   }
 
   switch (action.card) {
     case "Guard":
-      return "What would you like to guess?";
+      return "Guard guess";
     case "Prince":
-      return "Who should the Prince target?";
+      return "Prince target";
     case "Priest":
     case "Baron":
     case "King":
-      return "Choose the target";
+      return "Target";
     default:
-      return "Choose an option";
+      return action.card;
   }
 }
 
 function getChoiceLabel(action: PlayCardAction) {
   if (action.card === "Guard") {
-    return action.guess ? `Guess ${action.guess}` : "Play Guard";
+    return action.guess ? action.guess : "Play Guard";
   }
 
   if (action.targetId !== undefined) {
     return playerLabel(action.targetId);
   }
 
-  return `Play ${action.card}`;
+  return action.card;
 }
 
 function getChoiceHint(action: PlayCardAction) {
   if (action.card === "Guard") {
-    return "If the guess is right, the bot is eliminated.";
+    return "A correct guess eliminates the bot.";
   }
 
   if (action.card === "Prince" && action.targetId === HUMAN_PLAYER_INDEX) {
-    return "You will discard your hand and draw a replacement.";
+    return "You discard and redraw.";
   }
 
   if (action.card === "Prince") {
-    return "The bot will discard its hand and draw a replacement.";
-  }
-
-  if (action.card === "Priest") {
-    return "Peek at the bot's hidden card.";
-  }
-
-  if (action.card === "Baron") {
-    return "Compare hands. Lower card loses.";
-  }
-
-  if (action.card === "King") {
-    return "Swap your hand with the bot's hand.";
+    return "Bot discards and redraws.";
   }
 
   return CARD_TEXT[action.card];
 }
 
-function getDiscardHistory(cards: Card[]) {
-  return cards.length > 0 ? cards : [];
+function CardIllustration({ card }: { card: Card }) {
+  const className = `card-illustration card-illustration-${cardClass(card)}`;
+
+  if (card === "Guard") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M60 14 L96 28 V58 C96 82 80 100 60 108 C40 100 24 82 24 58 V28 Z" />
+        <path d="M60 28 V92" />
+        <path d="M39 50 H81" />
+      </svg>
+    );
+  }
+
+  if (card === "Priest") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M32 100 V48 L60 20 L88 48 V100 Z" />
+        <path d="M47 100 V70 C47 61 53 55 60 55 C67 55 73 61 73 70 V100" />
+        <path d="M60 34 V49" />
+        <path d="M52 42 H68" />
+      </svg>
+    );
+  }
+
+  if (card === "Baron") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M60 20 V96" />
+        <path d="M35 38 H85" />
+        <path d="M39 38 L25 70 H53 Z" />
+        <path d="M81 38 L67 70 H95 Z" />
+        <path d="M42 96 H78" />
+      </svg>
+    );
+  }
+
+  if (card === "Handmaid") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M60 18 C78 34 90 52 90 71 C90 91 77 104 60 104 C43 104 30 91 30 71 C30 52 42 34 60 18 Z" />
+        <path d="M43 70 C50 80 70 80 77 70" />
+        <path d="M43 52 C50 45 70 45 77 52" />
+      </svg>
+    );
+  }
+
+  if (card === "Prince") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M30 74 L38 34 L52 58 L60 28 L68 58 L82 34 L90 74 Z" />
+        <path d="M34 74 H86 V94 H34 Z" />
+        <path d="M46 86 H74" />
+      </svg>
+    );
+  }
+
+  if (card === "King") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M26 86 H94" />
+        <path d="M34 86 L42 36 L57 66 L60 26 L63 66 L78 36 L86 86" />
+        <path d="M42 96 H78" />
+      </svg>
+    );
+  }
+
+  if (card === "Countess") {
+    return (
+      <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+        <path d="M34 96 C40 50 80 50 86 96 Z" />
+        <path d="M42 52 C46 31 74 31 78 52" />
+        <path d="M49 40 L60 23 L71 40" />
+        <path d="M45 73 H75" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 120 120">
+      <path d="M60 18 L86 38 V76 C86 94 74 106 60 106 C46 106 34 94 34 76 V38 Z" />
+      <path d="M45 39 C50 28 70 28 75 39" />
+      <path d="M49 65 C55 72 65 72 71 65" />
+      <path d="M60 51 V90" />
+    </svg>
+  );
+}
+
+function CardFace({
+  card,
+  disabled = false,
+  onClick,
+  size = "large",
+}: {
+  card: Card;
+  disabled?: boolean;
+  onClick?: () => void;
+  size?: "large" | "small";
+}) {
+  const className = `card-face card-face-${cardClass(card)} card-face-${size}`;
+
+  if (onClick) {
+    return (
+      <button className={className} disabled={disabled} onClick={onClick} type="button">
+        <CardContents card={card} />
+      </button>
+    );
+  }
+
+  return (
+    <div className={className}>
+      <CardContents card={card} />
+    </div>
+  );
+}
+
+function CardContents({ card }: { card: Card }) {
+  return (
+    <>
+      <span className="card-corner">{CARD_VALUES[card]}</span>
+      <CardIllustration card={card} />
+      <span className="card-name">{card}</span>
+      <span className="card-text">{CARD_TEXT[card]}</span>
+    </>
+  );
+}
+
+function CardBack({ stacked = false }: { stacked?: boolean }) {
+  return (
+    <div className={`card-back ${stacked ? "card-back-stacked" : ""}`}>
+      <div className="card-back-frame">
+        <span>LL</span>
+      </div>
+    </div>
+  );
 }
 
 export function App() {
@@ -202,16 +339,22 @@ export function App() {
   const view = getPlayerView(state, HUMAN_PLAYER_INDEX);
   const legalActions = getLegalActions(state);
   const currentPlayer = state.players[state.currentPlayerIndex];
+  const me = view.players[HUMAN_PLAYER_INDEX];
   const opponent = view.players.find((player) => player.id !== HUMAN_PLAYER_INDEX) ?? null;
   const isHumanTurn =
     state.phase === "awaiting-card-play" && currentPlayer?.id === HUMAN_PLAYER_INDEX;
+  const isBotThinking =
+    state.phase === "awaiting-card-play" && currentPlayer?.id !== HUMAN_PLAYER_INDEX;
   const latestPublicEvent = [...view.log].reverse()[0] ?? null;
+  const lastPlayedEvent = getLastPlayedEvent(view.log);
   const knownCards = Object.entries(state.players[HUMAN_PLAYER_INDEX]?.seenCards ?? {});
-  const statusSummary = getStatusSummary(
+  const tokensToWin = TOKENS_TO_WIN_BY_RULESET[state.ruleset];
+  const prompt = getPrompt(
     state.phase,
     isHumanTurn,
     currentPlayer?.name,
     state.roundWinnerId,
+    state.gameWinnerId,
   );
 
   const historyCards = useMemo(() => {
@@ -220,7 +363,7 @@ export function App() {
     }
 
     const player = view.players.find((entry) => entry.id === historyPlayerId);
-    return getDiscardHistory(player?.discardPile ?? []);
+    return player?.discardPile ?? [];
   }, [historyPlayerId, view.players]);
 
   useEffect(() => {
@@ -247,7 +390,7 @@ export function App() {
         const botAction = botRef.current.chooseAction(botView, botActions);
         return applyAction(currentState, botAction);
       });
-    }, 650);
+    }, 950);
 
     return () => window.clearTimeout(timer);
   }, [currentPlayer?.id, state.phase]);
@@ -284,99 +427,94 @@ export function App() {
 
   return (
     <main className="game-shell">
-      <section className="top-bar">
-        <div>
-          <p className="bar-label">Love Letter</p>
-          <h1>Phone-first duel table</h1>
+      <header className="score-bar">
+        <div className="score-side">
+          <span className="score-name">You</span>
+          <strong>
+            {me?.tokens ?? 0}/{tokensToWin}
+          </strong>
         </div>
-        <button className="ghost-button" onClick={handleResetGame} type="button">
-          Reset
-        </button>
-      </section>
-
-      <section className="status-banner">
-        <p className="status-eyebrow">{statusSummary.eyebrow}</p>
-        <h2>{statusSummary.title}</h2>
-        <p className="status-copy">{statusSummary.body}</p>
-        <div className="status-chips">
-          <span className="status-chip">Round {state.roundNumber}</span>
-          <span className="status-chip">Deck {view.cardsRemaining}</span>
-          <span className="status-chip">{formatPhase(state.phase)}</span>
+        <div className="game-title">
+          <span>Love Letter</span>
+          <small>{formatPhase(state.phase)}</small>
         </div>
-        {latestPublicEvent && <p className="latest-event">Latest: {formatEvent(latestPublicEvent)}</p>}
-      </section>
+        <div className="score-side score-side-right">
+          <span className="score-name">Bot</span>
+          <strong>
+            {opponent?.tokens ?? 0}/{tokensToWin}
+          </strong>
+        </div>
+      </header>
 
-      <section className="table-surface">
-        <section className="opponent-zone">
-          <div className="zone-header">
+      <section className={`table-surface ${isBotThinking ? "table-surface-bot-thinking" : ""}`}>
+        <section className="opponent-zone" aria-label="Opponent area">
+          <div className="zone-row">
             <div>
-              <p className="zone-label">Opponent</p>
-              <h3>{opponent?.name ?? "Bot"}</h3>
+              <span className="zone-label">Opponent</span>
+              <h2>{opponent?.name ?? "Bot"}</h2>
             </div>
-            <span className="token-badge">{opponent?.tokens ?? 0} token(s)</span>
+            <button
+              className="pile-stack pile-stack-opponent"
+              onClick={() => setHistoryPlayerId(opponent?.id ?? 1)}
+              type="button"
+            >
+              <span>{opponent?.discardPile.length ?? 0}</span>
+              <strong>{opponent?.discardPile[opponent.discardPile.length - 1] ?? "Pile"}</strong>
+            </button>
           </div>
           <div className="opponent-hand" aria-label="Bot hand">
             {Array.from({ length: opponent?.handSize ?? 0 }).map((_, index) => (
-              <div className="card-back" key={`bot-card-${index}`}>
-                <div className="card-back-inner" />
-              </div>
+              <CardBack key={`bot-card-${index}`} />
             ))}
           </div>
-          <button
-            className="pile-button"
-            onClick={() => setHistoryPlayerId(opponent?.id ?? 1)}
-            type="button"
-          >
-            <span className="pile-label">Bot discard pile</span>
-            <span className="pile-top-card">
-              {opponent?.discardPile[opponent.discardPile.length - 1] ?? "Empty"}
-            </span>
-          </button>
         </section>
 
-        <section className="center-strip">
-          <div className="info-card">
-            <p className="info-label">Round state</p>
-            <strong>{currentPlayer?.name ?? "Bot"} is active</strong>
-            <span>
-              {state.visibleBurnedCards.length > 0
-                ? `Face-up burns: ${state.visibleBurnedCards.join(", ")}`
-                : "No face-up burned cards"}
-            </span>
+        <section className="center-table" aria-label="Table">
+          <div className="deck-area">
+            <CardBack stacked />
+            <span>{view.cardsRemaining}</span>
           </div>
-          <div className="info-card">
-            <p className="info-label">What you know</p>
-            {knownCards.length > 0 ? (
-              <span>
-                {knownCards
-                  .map(([playerId, card]) => `${playerLabel(Number(playerId))}: ${card}`)
-                  .join(" | ")}
-              </span>
+
+          <div className="turn-stage" key={lastPlayedEvent ? `${lastPlayedEvent.playerId}-${lastPlayedEvent.card}-${view.log.length}` : "empty"}>
+            {lastPlayedEvent ? (
+              <>
+                <span className="stage-label">{playerLabel(lastPlayedEvent.playerId)} played</span>
+                <CardFace card={lastPlayedEvent.card} size="small" />
+              </>
             ) : (
-              <span>No revealed opponent card remembered yet.</span>
+              <>
+                <span className="stage-label">Opening deal</span>
+                <div className="empty-stage">No cards played</div>
+              </>
             )}
           </div>
+
+          <div className="prompt-panel">
+            <strong>{prompt.title}</strong>
+            <span>{prompt.detail}</span>
+            {latestPublicEvent && <small>{formatEvent(latestPublicEvent)}</small>}
+          </div>
+
+          {knownCards.length > 0 && (
+            <div className="intel-strip">
+              {knownCards.map(([playerId, card]) => (
+                <span key={playerId}>
+                  {playerLabel(Number(playerId))}: {card}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
 
-        <section className="player-zone">
+        <section className="player-zone" aria-label="Your area">
           <button
-            className="pile-button player-pile"
+            className="pile-stack pile-stack-player"
             onClick={() => setHistoryPlayerId(HUMAN_PLAYER_INDEX)}
             type="button"
           >
-            <span className="pile-label">Your discard pile</span>
-            <span className="pile-top-card">
-              {view.players[HUMAN_PLAYER_INDEX]?.discardPile[view.players[HUMAN_PLAYER_INDEX].discardPile.length - 1] ?? "Empty"}
-            </span>
+            <span>{me?.discardPile.length ?? 0}</span>
+            <strong>{me?.discardPile[me.discardPile.length - 1] ?? "Pile"}</strong>
           </button>
-
-          <div className="zone-header">
-            <div>
-              <p className="zone-label">Your hand</p>
-              <h3>Tap a card to play it</h3>
-            </div>
-            <span className="token-badge">{view.players[HUMAN_PLAYER_INDEX]?.tokens ?? 0} token(s)</span>
-          </div>
 
           <div className="player-hand" aria-label="Your hand">
             {view.myHand.map((card, index) => {
@@ -384,38 +522,35 @@ export function App() {
               const playable = isHumanTurn && choices.length > 0;
 
               return (
-                <button
-                  className={`hand-card ${playable ? "hand-card-playable" : "hand-card-disabled"}`}
+                <CardFace
+                  card={card}
                   disabled={!playable}
                   key={`${card}-${index}`}
-                  onClick={() => handleCardTap(card)}
-                  type="button"
-                >
-                  <span className="hand-card-value">{CARD_VALUES[card]}</span>
-                  <span className="hand-card-name">{card}</span>
-                  <span className="hand-card-text">{CARD_TEXT[card]}</span>
-                </button>
+                  onClick={playable ? () => handleCardTap(card) : undefined}
+                />
               );
             })}
           </div>
 
-          <p className="tap-help">
-            {isHumanTurn
-              ? "Tap a card. If it needs a target or guess, a choice sheet will slide up."
-              : state.phase === "round-over"
-                ? "Start the next round when you're ready."
-                : "Wait for the bot's move, then your next two-card hand will appear here."}
-          </p>
-
-          {state.phase === "round-over" && (
-            <button
-              className="primary-button"
-              onClick={() => handleAction({ type: "start-next-round" })}
-              type="button"
-            >
-              Start next round
+          <div className="action-row">
+            {state.phase === "round-over" && (
+              <button
+                className="primary-button"
+                onClick={() => handleAction({ type: "start-next-round" })}
+                type="button"
+              >
+                Next round
+              </button>
+            )}
+            {state.phase === "game-over" && (
+              <button className="primary-button" onClick={handleResetGame} type="button">
+                New game
+              </button>
+            )}
+            <button className="ghost-button" onClick={handleResetGame} type="button">
+              Reset
             </button>
-          )}
+          </div>
         </section>
       </section>
 
@@ -424,8 +559,8 @@ export function App() {
           <section aria-modal="true" className="bottom-sheet" role="dialog">
             <div className="sheet-header">
               <div>
-                <p className="zone-label">Card choice</p>
-                <h3>{getChoiceSheetTitle(pendingChoices[0])}</h3>
+                <span className="zone-label">Choose</span>
+                <h2>{getChoiceSheetTitle(pendingChoices[0])}</h2>
               </div>
               <button
                 aria-label="Close card choices"
@@ -458,8 +593,8 @@ export function App() {
           <section aria-modal="true" className="bottom-sheet" role="dialog">
             <div className="sheet-header">
               <div>
-                <p className="zone-label">Discard history</p>
-                <h3>{playerLabel(historyPlayerId)} played</h3>
+                <span className="zone-label">Played cards</span>
+                <h2>{playerLabel(historyPlayerId)}</h2>
               </div>
               <button
                 aria-label="Close discard history"
@@ -474,13 +609,17 @@ export function App() {
               {historyCards.length > 0 ? (
                 historyCards.map((card, index) => (
                   <div className="history-item" key={`${card}-${index}`}>
-                    <span>{index + 1}.</span>
-                    <strong>{card}</strong>
-                    <span>{CARD_TEXT[card]}</span>
+                    <CardFace card={card} size="small" />
+                    <div>
+                      <strong>
+                        {index + 1}. {card}
+                      </strong>
+                      <span>{CARD_TEXT[card]}</span>
+                    </div>
                   </div>
                 ))
               ) : (
-                <p className="empty-copy">No cards have been discarded yet.</p>
+                <p className="empty-copy">No cards played.</p>
               )}
             </div>
           </section>
@@ -489,4 +628,3 @@ export function App() {
     </main>
   );
 }
-

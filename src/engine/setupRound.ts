@@ -76,6 +76,7 @@ function createRoundState(options: CreateRoundStateOptions): GameState {
     phase: "awaiting-turn-draw",
     roundNumber: options.roundNumber,
     roundWinnerId: null,
+    gameWinnerId: null,
     ruleset: options.ruleset,
     pendingAction: null,
     log: [{ type: "turn-started", playerId: options.startingPlayerIndex }],

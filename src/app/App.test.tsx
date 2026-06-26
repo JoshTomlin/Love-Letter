@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 
 describe("App", () => {
-  it("renders the phone-first duel table heading", () => {
+  it("renders the game table", () => {
     render(<App />);
 
-    expect(
-      screen.getByRole("heading", { name: /phone-first duel table/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Love Letter")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your hand")).toBeInTheDocument();
   });
 });

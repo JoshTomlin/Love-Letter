@@ -127,6 +127,27 @@ describe("applyAction", () => {
     });
   });
 
+  it("eliminates a player who plays Princess", () => {
+    const state = createTestState({
+      players: [
+        createPlayer(0, "You", ["Princess", "Guard"]),
+        createPlayer(1, "Bot", ["Priest"]),
+      ],
+      deck: ["King"],
+    });
+
+    const nextState = applyAction(state, {
+      type: "play-card",
+      playerId: 0,
+      card: "Princess",
+    });
+
+    expect(nextState.phase).toBe("round-over");
+    expect(nextState.roundWinnerId).toBe(1);
+    expect(nextState.players[0].eliminated).toBe(true);
+    expect(nextState.players[1].tokens).toBe(1);
+  });
+
   it("uses the burned card when Prince forces a draw and the deck is empty", () => {
     const state = createTestState({
       players: [
@@ -213,5 +234,28 @@ describe("applyAction", () => {
     expect(nextRound.players[0].tokens).toBe(1);
     expect(nextRound.players[1].tokens).toBe(2);
     expect(nextRound.phase).toBe("awaiting-turn-draw");
+  });
+
+  it("ends the game when a 2-player winner reaches 7 tokens", () => {
+    const state = createTestState({
+      players: [
+        createPlayer(0, "You", ["Guard", "Priest"], { tokens: 6 }),
+        createPlayer(1, "Bot", ["Baron"]),
+      ],
+      deck: ["King"],
+    });
+
+    const nextState = applyAction(state, {
+      type: "play-card",
+      playerId: 0,
+      card: "Guard",
+      targetId: 1,
+      guess: "Baron",
+    });
+
+    expect(nextState.phase).toBe("game-over");
+    expect(nextState.roundWinnerId).toBe(0);
+    expect(nextState.gameWinnerId).toBe(0);
+    expect(nextState.players[0].tokens).toBe(7);
   });
 });
