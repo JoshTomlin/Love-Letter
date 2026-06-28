@@ -75,14 +75,14 @@ body { overscroll-behavior: none; }
 .burn-area > .card-back { width: 100%; height: auto; }
 .burn-label { position: absolute; z-index: 2; top: -.9rem; left: 50%; color: #e4c57a; font-size: .6rem; text-transform: uppercase; transform: translateX(-50%); }
 .burn-empty { display: grid; place-items: center; width: 100%; aspect-ratio: 5 / 7; border: 1px dashed rgba(248,242,232,.25); border-radius: 8px; color: rgba(248,242,232,.58); font-size: .62rem; }
-@media (max-width: 719px) {
+@media (min-width: 0px) {
   .game-shell { display: grid; grid-template-rows: auto minmax(0,1fr); width: min(100%,430px); height: 100vh; height: 100dvh; min-height: 0; padding: calc(.35rem + env(safe-area-inset-top)) .55rem calc(.4rem + env(safe-area-inset-bottom)); overflow: hidden; }
   .score-bar { min-height: 2.6rem; margin: 0; }
   .score-name, .game-title small, .zone-label, .stage-label { font-size: .64rem; }
   .score-side strong { font-size: 1rem; }
   .game-title span { font-size: 1.15rem; }
-  .table-surface { grid-template-rows: minmax(0,.78fr) minmax(0,1.08fr) minmax(0,1.28fr); gap: .35rem; min-height: 0; height: 100%; overflow: hidden; }
-  .opponent-zone, .player-zone, .center-table { position: relative; min-width: 0; min-height: 0; }
+  .table-surface { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,.78fr) minmax(0,1.08fr) minmax(0,1.28fr); align-items: stretch; gap: .35rem; min-height: 0; height: 100%; overflow: hidden; }
+  .opponent-zone, .player-zone, .center-table { position: relative; align-self: stretch; min-width: 0; min-height: 0; }
   .opponent-zone { display: grid; grid-template-rows: auto minmax(0,1fr); }
   .player-zone { display: grid; grid-template-rows: auto minmax(0,1fr) auto; }
   .zone-row, .player-tools { min-height: 2rem; margin: 0; }
@@ -119,16 +119,13 @@ body { overscroll-behavior: none; }
   .pile-stack-player { margin: 0; }
   .action-row { position: absolute; z-index: 14; left: 50%; bottom: .35rem; width: min(80%,18rem); margin: 0; transform: translateX(-50%); }
 }
-@media (max-height: 700px) and (max-width: 719px) {
+@media (max-height: 700px) {
   .game-shell { padding-top: calc(.2rem + env(safe-area-inset-top)); padding-bottom: calc(.2rem + env(safe-area-inset-bottom)); }
   .score-bar { min-height: 2.2rem; }
   .table-surface { gap: .2rem; }
   .zone-row, .player-tools { min-height: 1.7rem; }
   .center-table { grid-template-columns: 3.7rem minmax(0,1fr) 3.7rem; }
   .prompt-panel { min-height: 2rem; padding-block: .22rem; }
-}
-@media (min-width: 720px) {
-  .center-table { grid-template-columns: 4.5rem minmax(0,1fr) 4.5rem; grid-template-areas: "deck stage burn" "prompt prompt prompt" "bubbles bubbles bubbles" "intel intel intel"; }
 }`;
 
 const MOBILE_EFFECT_STYLES = String.raw`
