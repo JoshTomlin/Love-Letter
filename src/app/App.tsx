@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createRandomBot } from "../bots/randomBot";
+import { createSimpleBot } from "../bots/randomBot";
 import { CARD_VALUES, TOKENS_TO_WIN_BY_RULESET } from "../engine/constants";
 import { applyAction } from "../engine/applyAction";
 import { getLegalActions } from "../engine/legalActions";
@@ -21,7 +21,7 @@ const REVEAL_CUE_MS = 800;
 const DRAW_CUE_MS = 950;
 const PLAY_CUE_MS = 850;
 const RESOLVE_CUE_MS = 1650;
-const PRIEST_REVEAL_MS = 2400;
+const HAND_REVEAL_CUE_MS = 2400;
 
 const CARD_TEXT: Record<Card, string> = {
   Guard: "Name a card. Correct guesses eliminate.",
@@ -42,6 +42,10 @@ type TableCue = {
   card?: Card;
   targetId?: number;
   revealedCard?: Card;
+  comparisonCards?: { actor: Card; target: Card };
+  swappedCards?: { actor: Card; target: Card };
+  discardedCard?: Card;
+  drewReplacement?: boolean;
   title: string;
   detail: string;
   speech?: string;
@@ -56,6 +60,21 @@ body { overscroll-behavior: none; }
 .hand-card-slot > .card-face, .hand-card-slot > .card-back { width: 100%; height: 100%; min-height: 0; }
 .player-tools { display: flex; align-items: center; justify-content: flex-end; gap: .45rem; min-height: 2rem; }
 .reset-button { min-height: 1.8rem; padding: .25rem .5rem; border: 0; border-radius: 8px; background: rgba(248,242,232,.1); color: rgba(248,242,232,.82); font: inherit; font-size: .68rem; cursor: pointer; }
+.pile-stack.pile-stack-visual { display: grid; grid-template-columns: 1.8rem minmax(0,1fr) auto; gap: .3rem; align-items: center; width: 7.4rem; max-width: 7.4rem; min-height: 2.9rem; padding: .22rem .3rem; }
+.pile-stack .pile-card-preview { position: relative; display: block; width: 1.8rem; height: 2.45rem; border-radius: 4px; background: transparent; }
+.pile-card-preview > .card-face { width: 100%; height: 100%; min-height: 0; padding: .1rem; border-radius: 4px; box-shadow: 0 .2rem .35rem rgba(2,8,10,.3); }
+.pile-card-preview .card-face::before { inset: .08rem; border-radius: 3px; }
+.pile-card-preview .card-corner { width: .72rem; height: .72rem; font-size: .46rem; }
+.pile-card-preview .card-illustration, .pile-card-preview .card-text { display: none; }
+.pile-card-preview .card-name { font-size: .4rem; line-height: 1; }
+.pile-stack .pile-empty { display: grid; place-items: center; width: 100%; height: 100%; border: 1px dashed rgba(248,242,232,.32); border-radius: 4px; background: rgba(248,242,232,.04); color: rgba(248,242,232,.58); font-size: .42rem; }
+.pile-stack .pile-copy { min-width: 0; color: #f8f2e8; font-size: .58rem; line-height: 1.05; white-space: normal; }
+.pile-stack .pile-count { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; border-radius: 999px; background: #e4c57a; color: #172d33; font-size: .65rem; font-weight: 700; }
+.pile-stack-receiving { animation: pile-receive 700ms ease-in-out 2 alternate; border-color: rgba(245,200,75,.8); }
+.burn-area { grid-area: burn; position: relative; align-self: center; width: 100%; }
+.burn-area > .card-back { width: 100%; height: auto; }
+.burn-label { position: absolute; z-index: 2; top: -.9rem; left: 50%; color: #e4c57a; font-size: .6rem; text-transform: uppercase; transform: translateX(-50%); }
+.burn-empty { display: grid; place-items: center; width: 100%; aspect-ratio: 5 / 7; border: 1px dashed rgba(248,242,232,.25); border-radius: 8px; color: rgba(248,242,232,.58); font-size: .62rem; }
 @media (max-width: 719px) {
   .game-shell { display: grid; grid-template-rows: auto minmax(0,1fr); width: min(100%,430px); height: 100vh; height: 100dvh; min-height: 0; padding: calc(.35rem + env(safe-area-inset-top)) .55rem calc(.4rem + env(safe-area-inset-bottom)); overflow: hidden; }
   .score-bar { min-height: 2.6rem; margin: 0; }
@@ -81,10 +100,9 @@ body { overscroll-behavior: none; }
   .card-illustration { width: min(4.7rem,70%); max-height: 100%; }
   .card-back { padding: .3rem; }
   .card-back-frame span { width: clamp(1.7rem,8vmin,2.7rem); height: clamp(1.7rem,8vmin,2.7rem); font-size: clamp(.68rem,3vmin,.95rem); }
-  .pile-stack { min-width: 4.8rem; max-width: 7rem; min-height: 1.8rem; padding: .25rem .38rem; }
-  .pile-stack span { width: 1.3rem; height: 1.3rem; font-size: .7rem; }
+  .pile-stack.pile-stack-visual { min-width: 7.4rem; max-width: 7.4rem; min-height: 2.9rem; padding: .22rem .3rem; }
   .pile-stack strong { font-size: .68rem; }
-  .center-table { grid-template-columns: 4.15rem minmax(0,1fr); grid-template-rows: minmax(0,1fr) auto; grid-template-areas: "deck stage" "prompt prompt"; gap: .35rem; align-items: center; align-content: stretch; padding: .18rem 0; }
+  .center-table { grid-template-columns: 4.15rem minmax(0,1fr) 4.15rem; grid-template-rows: minmax(0,1fr) auto; grid-template-areas: "deck stage burn" "prompt prompt prompt"; gap: .35rem; align-items: center; align-content: stretch; padding: .18rem 0; }
   .deck-area > .card-back { height: auto; }
   .deck-area > span { width: 1.45rem; height: 1.45rem; font-size: .72rem; }
   .turn-stage { grid-template-columns: minmax(4.2rem,5.25rem) minmax(0,1fr); gap: .35rem; width: 100%; height: 100%; min-height: 0; padding: .1rem; }
@@ -106,8 +124,11 @@ body { overscroll-behavior: none; }
   .score-bar { min-height: 2.2rem; }
   .table-surface { gap: .2rem; }
   .zone-row, .player-tools { min-height: 1.7rem; }
-  .center-table { grid-template-columns: 3.7rem minmax(0,1fr); }
+  .center-table { grid-template-columns: 3.7rem minmax(0,1fr) 3.7rem; }
   .prompt-panel { min-height: 2rem; padding-block: .22rem; }
+}
+@media (min-width: 720px) {
+  .center-table { grid-template-columns: 4.5rem minmax(0,1fr) 4.5rem; grid-template-areas: "deck stage burn" "prompt prompt prompt" "bubbles bubbles bubbles" "intel intel intel"; }
 }`;
 
 const MOBILE_EFFECT_STYLES = String.raw`
@@ -119,12 +140,20 @@ const MOBILE_EFFECT_STYLES = String.raw`
 .speech-bubble-response { background: #f8f2e8; color: #172d33; font-weight: 700; }
 .speech-bubble-success { background: #5dbf7e; color: #082219; }
 .speech-bubble-danger { background: #ec5656; color: #fff8ed; }
-.action-effect { position: absolute; z-index: 11; left: 59%; top: 40%; display: grid; place-items: center; min-width: 4.5rem; min-height: 4.5rem; border-radius: 999px; color: #f8f2e8; font-family: Georgia,"Times New Roman",serif; font-size: 1rem; font-weight: 700; text-shadow: 0 2px 4px rgba(2,8,10,.42); transform: translate(-50%,-50%); pointer-events: none; animation: effect-burst 650ms cubic-bezier(.2,.85,.25,1) both; }
+.action-effect { position: absolute; z-index: 11; left: 50%; top: 40%; display: grid; place-items: center; min-width: 4.5rem; min-height: 4.5rem; border-radius: 999px; color: #f8f2e8; font-family: Georgia,"Times New Roman",serif; font-size: 1rem; font-weight: 700; text-shadow: 0 2px 4px rgba(2,8,10,.42); transform: translate(-50%,-50%); pointer-events: none; animation: effect-burst 650ms cubic-bezier(.2,.85,.25,1) both; }
 .action-effect-priest svg { width: 6.5rem; filter: drop-shadow(0 0 .6rem rgba(106,164,184,.9)); }
 .action-effect-priest path, .action-effect-priest circle { fill: rgba(106,164,184,.22); stroke: #d9f4ff; stroke-width: 4; }
 .action-effect-guard { border: 3px solid #f0d17f; background: rgba(109,31,32,.88); font-size: 2.4rem; }
 .action-effect-baron, .action-effect-prince, .action-effect-king, .action-effect-princess { border: 2px solid rgba(248,242,232,.76); background: rgba(3,18,20,.78); }
 .action-effect-handmaid { border: 3px solid #f0d17f; background: rgba(53,90,45,.9); font-size: .68rem; }
+.action-effect-card-row { display: flex; gap: .35rem; align-items: center; width: min(92%,13rem); min-height: 5.8rem; padding: .45rem; border: 2px solid rgba(248,242,232,.7); border-radius: 8px; background: rgba(3,18,20,.9); }
+.action-effect-card-row .card-face, .action-effect-card-row .card-back { flex: 0 0 3.5rem; width: 3.5rem; height: auto; }
+.action-effect-card-row > span { flex: 0 0 auto; color: #f5d76e; font-size: .78rem; }
+.action-effect-baron-comparison .card-face { animation: priest-card-flip 500ms ease both; }
+.action-effect-prince-discard .card-face { animation: discard-card 900ms ease both; }
+.action-effect-king-swap .card-face:first-child { animation: swap-left-card 850ms ease both; }
+.action-effect-king-swap .card-face:last-child { animation: swap-right-card 850ms ease both; }
+.action-effect-king-blocked { border: 3px solid #f5d76e; background: rgba(53,90,45,.92); font-size: .68rem; }
 .action-effect-win { width: 7rem; height: 7rem; border: 3px solid #f5c84b; background: rgba(93,63,20,.72); box-shadow: 0 0 2rem rgba(245,200,75,.68); }
 .effect-crown { font-size: 2.4rem; }
 .action-effect-win i { position: absolute; width: .45rem; height: .45rem; border-radius: 999px; background: #f5c84b; animation: win-orbit 1200ms linear infinite; }
@@ -137,21 +166,33 @@ const MOBILE_EFFECT_STYLES = String.raw`
 .hand-card-slot-playing-bot { animation: bot-card-to-table 850ms cubic-bezier(.25,.78,.28,1) both; }
 .hand-card-slot-playing-you { animation: player-card-to-table 850ms cubic-bezier(.25,.78,.28,1) both; }
 .hand-card-slot-priest-reveal { z-index: 10; animation: priest-card-flip 500ms ease both, priest-card-glow 800ms 500ms ease-in-out infinite alternate; }
+.hand-card-slot-baron-reveal { z-index: 10; animation: priest-card-flip 500ms ease both, baron-card-glow 800ms 500ms ease-in-out infinite alternate; }
 .table-surface-bot-thinking .opponent-hand .hand-card-slot:not(.hand-card-slot-revealing) { animation: bot-think 780ms ease-in-out infinite alternate; }
 .table-surface-bot-thinking .opponent-hand .hand-card-slot:nth-child(2) { animation-delay: -390ms; }
 @keyframes reveal-in-hand { 0% { transform: rotateY(0) scale(1); } 48% { transform: rotateY(88deg) scale(1.08); } 52% { transform: rotateY(92deg) scale(1.08); } 100% { transform: rotateY(360deg) scale(1.05); filter: brightness(1.12); } }
 @keyframes priest-card-flip { from { transform: rotateY(90deg); } to { transform: rotateY(360deg); } }
 @keyframes priest-card-glow { from { filter: drop-shadow(0 0 .2rem rgba(217,244,255,.4)); } to { filter: drop-shadow(0 0 .9rem rgba(217,244,255,1)); } }
+@keyframes baron-card-glow { from { filter: drop-shadow(0 0 .2rem rgba(228,197,122,.4)); } to { filter: drop-shadow(0 0 .9rem rgba(228,197,122,1)); } }
+@keyframes discard-card { from { transform: translateY(0) rotate(0); opacity: 1; } to { transform: translateY(1rem) rotate(-8deg); opacity: .72; } }
+@keyframes swap-left-card { from { transform: translateX(0) rotate(0); } 50% { transform: translate(4.2rem,-.45rem) rotate(8deg); } to { transform: translateX(0) rotate(0); } }
+@keyframes swap-right-card { from { transform: translateX(0) rotate(0); } 50% { transform: translate(-4.2rem,.45rem) rotate(-8deg); } to { transform: translateX(0) rotate(0); } }
 @keyframes bot-card-to-table { 0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1.04); } 75% { opacity: 1; transform: translate(-1.2rem,20vh) rotate(-5deg) scale(.84); } 100% { opacity: 0; transform: translate(-1.2rem,20vh) rotate(-5deg) scale(.84); } }
 @keyframes player-card-to-table { 0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1.04); } 75% { opacity: 1; transform: translate(.8rem,-24vh) rotate(5deg) scale(.68); } 100% { opacity: 0; transform: translate(.8rem,-24vh) rotate(5deg) scale(.68); } }
 @keyframes effect-burst { 0% { opacity: 0; transform: translate(-50%,-50%) scale(.35) rotate(-18deg); } 70% { opacity: 1; transform: translate(-50%,-50%) scale(1.12) rotate(3deg); } 100% { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
 @keyframes shield-pulse { from { opacity: .72; transform: scale(.94); } to { opacity: 1; transform: scale(1.05); } }
+@keyframes pile-receive { from { transform: scale(1); box-shadow: 0 0 0 rgba(245,200,75,0); } to { transform: scale(1.05); box-shadow: 0 0 1rem rgba(245,200,75,.6); } }
 @keyframes win-orbit { from { transform: rotate(0) translateX(4.3rem) rotate(0); } to { transform: rotate(360deg) translateX(4.3rem) rotate(-360deg); } }
 @media (prefers-reduced-motion: reduce) { .hand-card-slot, .action-effect, .shield-aura svg { animation-duration: 1ms !important; } }
 `;
 
 function playerLabel(playerId: number) {
   return playerId === HUMAN_PLAYER_INDEX ? "You" : "Bot";
+}
+
+function playerAction(playerId: number, humanVerb: string, botVerb: string) {
+  return `${playerLabel(playerId)} ${
+    playerId === HUMAN_PLAYER_INDEX ? humanVerb : botVerb
+  }`;
 }
 
 function cardClass(card: Card) {
@@ -219,13 +260,13 @@ function createGame() {
 function getPrompt(
   phase: RoundPhase,
   isHumanTurn: boolean,
-  currentPlayerName: string | undefined,
+  currentPlayerId: number | undefined,
   roundWinnerId: number | null,
   gameWinnerId: number | null,
 ) {
   if (phase === "game-over") {
     return {
-      title: `${playerLabel(gameWinnerId ?? HUMAN_PLAYER_INDEX)} wins the game`,
+      title: `${playerAction(gameWinnerId ?? HUMAN_PLAYER_INDEX, "win", "wins")} the game`,
       detail: "Final token reached.",
     };
   }
@@ -235,14 +276,17 @@ function getPrompt(
       title:
         roundWinnerId === null
           ? "Round complete"
-          : `${playerLabel(roundWinnerId)} wins the round`,
+          : `${playerAction(roundWinnerId, "win", "wins")} the round`,
       detail: "Deal the next round.",
     };
   }
 
   if (phase === "awaiting-turn-draw") {
     return {
-      title: `${currentPlayerName ?? "Player"} draws`,
+      title:
+        currentPlayerId === undefined
+          ? "Player draws"
+          : playerAction(currentPlayerId, "draw", "draws"),
       detail: "Second card enters the hand.",
     };
   }
@@ -336,7 +380,6 @@ function getChoiceHint(action: PlayCardAction) {
 }
 
 function getPlayCue(action: PlayCardAction): TableCue {
-  const actor = playerLabel(action.playerId);
   const target =
     action.targetId === undefined ? null : playerLabel(action.targetId);
 
@@ -346,7 +389,7 @@ function getPlayCue(action: PlayCardAction): TableCue {
       actorId: action.playerId,
       targetId: action.targetId,
       card: action.card,
-      title: `${actor} plays Guard`,
+      title: `${playerAction(action.playerId, "play", "plays")} Guard`,
       detail: `${target ?? "Opponent"} is challenged.`,
       speech: `I guess ${action.guess}.`,
     };
@@ -357,7 +400,7 @@ function getPlayCue(action: PlayCardAction): TableCue {
     actorId: action.playerId,
     targetId: action.targetId,
     card: action.card,
-    title: `${actor} plays ${action.card}`,
+    title: `${playerAction(action.playerId, "play", "plays")} ${action.card}`,
     detail: target ? `${target} is targeted.` : CARD_TEXT[action.card],
   };
 }
@@ -396,7 +439,7 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
       actorId: action.playerId,
       targetId: action.targetId,
       card: action.card,
-      title: `${actor} uses Priest`,
+      title: `${playerAction(action.playerId, "use", "uses")} Priest`,
       detail:
         action.playerId === HUMAN_PLAYER_INDEX && reveal?.type === "card-revealed"
           ? `You saw ${playerLabel(reveal.targetId)} holding ${reveal.card}.`
@@ -411,17 +454,30 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
 
   if (action.card === "Baron") {
     const eliminatedPlayer = eliminatedTarget ?? eliminatedActor;
+    const actorBefore = before.players.find((player) => player.id === action.playerId);
+    const targetBefore = before.players.find((player) => player.id === action.targetId);
+    const actorHand = [...(actorBefore?.hand ?? [])];
+    const playedCardIndex = actorHand.indexOf("Baron");
+    if (playedCardIndex >= 0) {
+      actorHand.splice(playedCardIndex, 1);
+    }
+    const actorCard = actorHand[0];
+    const targetCard = targetBefore?.hand[0];
 
     return {
       kind: "resolve",
       actorId: action.playerId,
       targetId: action.targetId,
       card: action.card,
+      comparisonCards:
+        actorCard && targetCard ? { actor: actorCard, target: targetCard } : undefined,
       title: "Baron comparison",
       detail: eliminatedPlayer
         ? `${playerLabel(eliminatedPlayer.id)} had the lower card.`
         : "The cards matched. Nobody is eliminated.",
-      response: eliminatedPlayer ? `${playerLabel(eliminatedPlayer.id)} is out.` : "Tie.",
+      response: eliminatedPlayer
+        ? `${playerAction(eliminatedPlayer.id, "are", "is")} out.`
+        : "Tie.",
       tone: eliminatedPlayer ? "danger" : "neutral",
     };
   }
@@ -431,7 +487,7 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
       kind: "resolve",
       actorId: action.playerId,
       card: action.card,
-      title: `${actor} is protected`,
+      title: playerAction(action.playerId, "are protected", "is protected"),
       detail: "Handmaid blocks targeting until that player's next turn.",
       response: "Protected.",
       tone: "success",
@@ -442,13 +498,22 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
     const princessDiscard = newEvents.some(
       (event) => event.type === "player-eliminated" && event.reason === "discarded-princess",
     );
+    const discardedCard = [...after.discardPile.slice(before.discardPile.length)]
+      .reverse()
+      .find((entry) => entry.playerId === action.targetId)?.card;
+    const targetAfter = after.players.find((player) => player.id === action.targetId);
 
     return {
       kind: "resolve",
       actorId: action.playerId,
       targetId: action.targetId,
       card: action.card,
-      title: `${target ?? "Target"} discards`,
+      discardedCard,
+      drewReplacement: Boolean(targetAfter && !targetAfter.eliminated && targetAfter.hand.length > 0),
+      title:
+        action.targetId === undefined
+          ? "Target discards"
+          : playerAction(action.targetId, "discard", "discards"),
       detail: princessDiscard
         ? "Princess was discarded, so the target is eliminated."
         : `${target ?? "Target"} discarded and drew a replacement.`,
@@ -458,14 +523,40 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
   }
 
   if (action.card === "King") {
+    const actorBefore = before.players.find((player) => player.id === action.playerId);
+    const targetBefore = before.players.find((player) => player.id === action.targetId);
+    const actorHand = [...(actorBefore?.hand ?? [])];
+    const playedCardIndex = actorHand.indexOf("King");
+    if (playedCardIndex >= 0) {
+      actorHand.splice(playedCardIndex, 1);
+    }
+    const actorCard = actorHand[0];
+    const targetCard = targetBefore?.hand[0];
+
+    if (!actorCard || !targetCard || action.targetId === undefined) {
+      return {
+        kind: "resolve",
+        actorId: action.playerId,
+        card: action.card,
+        title: "King is blocked",
+        detail: "The opponent is protected, so both hands stay where they are.",
+        response: "No swap.",
+        tone: "neutral",
+      };
+    }
+
     return {
       kind: "resolve",
       actorId: action.playerId,
       targetId: action.targetId,
       card: action.card,
+      swappedCards: { actor: actorCard, target: targetCard },
       title: "Hands traded",
       detail: `${actor} and ${target ?? "the target"} swapped hands.`,
-      response: "Swapped.",
+      response:
+        action.playerId === HUMAN_PLAYER_INDEX
+          ? `You received ${targetCard}.`
+          : `You received ${actorCard}.`,
       tone: "success",
     };
   }
@@ -477,7 +568,7 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
       card: action.card,
       title: `${actor} discarded Princess`,
       detail: "Princess leaving the hand eliminates that player.",
-      response: `${actor} is out.`,
+      response: `${playerAction(action.playerId, "are", "is")} out.`,
       tone: "danger",
     };
   }
@@ -502,7 +593,7 @@ function getWinCue(state: GameState): TableCue {
     return {
       kind: "win",
       actorId: winnerId,
-      title: `${winner} wins the game`,
+      title: `${playerAction(winnerId, "win", "wins")} the game`,
       detail: `${winner} reached ${tokensToWin} tokens.`,
       response: "Game over.",
       tone: "success",
@@ -512,7 +603,7 @@ function getWinCue(state: GameState): TableCue {
   return {
     kind: "win",
     actorId: winnerId,
-    title: `${winner} wins the round`,
+    title: `${playerAction(winnerId, "win", "wins")} the round`,
     detail: "A favor token is awarded.",
     response: "+1 token",
     tone: "success",
@@ -657,6 +748,35 @@ function CardBack({ stacked = false }: { stacked?: boolean }) {
   );
 }
 
+function DiscardPileButton({
+  cards,
+  label,
+  onClick,
+  receiving = false,
+}: {
+  cards: Card[];
+  label: string;
+  onClick: () => void;
+  receiving?: boolean;
+}) {
+  const topCard = cards[cards.length - 1];
+
+  return (
+    <button
+      aria-label={`Open ${label.toLowerCase()} history`}
+      className={`pile-stack pile-stack-visual ${receiving ? "pile-stack-receiving" : ""}`}
+      onClick={onClick}
+      type="button"
+    >
+      <span className="pile-card-preview">
+        {topCard ? <CardFace card={topCard} size="small" /> : <span className="pile-empty">Empty</span>}
+      </span>
+      <strong className="pile-copy">{label}</strong>
+      <span className="pile-count">{cards.length}</span>
+    </button>
+  );
+}
+
 function ActionEffect({ cue }: { cue: TableCue | null }) {
   if (!cue || (cue.kind !== "resolve" && cue.kind !== "win")) {
     return null;
@@ -697,6 +817,44 @@ function ActionEffect({ cue }: { cue: TableCue | null }) {
     return <div className="action-effect action-effect-guard" aria-hidden="true">?</div>;
   }
 
+  if (cue.card === "Baron" && cue.comparisonCards) {
+    return (
+      <div className="action-effect action-effect-card-row action-effect-baron-comparison" aria-hidden="true">
+        <CardFace card={cue.comparisonCards.actor} size="small" />
+        <span>VS</span>
+        <CardFace card={cue.comparisonCards.target} size="small" />
+      </div>
+    );
+  }
+
+  if (cue.card === "Prince" && cue.discardedCard) {
+    return (
+      <div className="action-effect action-effect-card-row action-effect-prince-discard" aria-hidden="true">
+        <CardFace card={cue.discardedCard} size="small" />
+        <span>OUT</span>
+        {cue.drewReplacement && <CardBack />}
+      </div>
+    );
+  }
+
+  if (cue.card === "King") {
+    if (!cue.swappedCards) {
+      return (
+        <div className="action-effect action-effect-king-blocked" aria-hidden="true">
+          BLOCKED
+        </div>
+      );
+    }
+
+    return (
+      <div className="action-effect action-effect-card-row action-effect-king-swap" aria-hidden="true">
+        <CardFace card={cue.swappedCards.actor} size="small" />
+        <span>SWAP</span>
+        <CardFace card={cue.swappedCards.target} size="small" />
+      </div>
+    );
+  }
+
   if (cue.card && labels[cue.card]) {
     return (
       <div className={`action-effect action-effect-${cardClass(cue.card)}`} aria-hidden="true">
@@ -727,15 +885,16 @@ export function App() {
   const [isSequencing, setIsSequencing] = useState(false);
   const sequenceInProgressRef = useRef(false);
   const timeoutsRef = useRef<number[]>([]);
-  const botRef = useRef<ReturnType<typeof createRandomBot> | null>(null);
+  const botRef = useRef<ReturnType<typeof createSimpleBot> | null>(null);
   if (botRef.current === null) {
-    botRef.current = createRandomBot(createSeed());
+    botRef.current = createSimpleBot(createSeed());
   }
   const view = getPlayerView(state, HUMAN_PLAYER_INDEX);
   const legalActions = getLegalActions(state);
   const currentPlayer = state.players[state.currentPlayerIndex];
   const me = view.players[HUMAN_PLAYER_INDEX];
   const opponent = view.players.find((player) => player.id !== HUMAN_PLAYER_INDEX) ?? null;
+  const opponentState = state.players.find((player) => player.id !== HUMAN_PLAYER_INDEX) ?? null;
   const isHumanTurn =
     state.phase === "awaiting-card-play" && currentPlayer?.id === HUMAN_PLAYER_INDEX;
   const isBotThinking =
@@ -747,7 +906,7 @@ export function App() {
   const prompt = getPrompt(
     state.phase,
     isHumanTurn,
-    currentPlayer?.name,
+    currentPlayer?.id,
     state.roundWinnerId,
     state.gameWinnerId,
   );
@@ -758,12 +917,16 @@ export function App() {
   const stageActorId = tableCue?.actorId ?? lastPlayedEvent?.playerId ?? null;
   const stageLabel = tableCue
     ? tableCue.kind === "draw"
-      ? `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} draws`
+      ? playerAction(tableCue.actorId ?? HUMAN_PLAYER_INDEX, "draw", "draws")
       : tableCue.kind === "reveal"
-        ? `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} reveals`
+        ? playerAction(tableCue.actorId ?? HUMAN_PLAYER_INDEX, "reveal", "reveals")
       : tableCue.kind === "win"
         ? "Round result"
-        : `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} ${tableCue.kind === "play" ? "plays" : "resolves"}`
+        : playerAction(
+            tableCue.actorId ?? HUMAN_PLAYER_INDEX,
+            tableCue.kind === "play" ? "play" : "resolve",
+            tableCue.kind === "play" ? "plays" : "resolves",
+          )
     : lastPlayedEvent
       ? `${playerLabel(lastPlayedEvent.playerId)} played`
       : "Opening deal";
@@ -780,6 +943,20 @@ export function App() {
     tableCue.card === "Priest" &&
     tableCue.targetId === opponent?.id &&
     tableCue.revealedCard;
+  const baronRevealsBot =
+    tableCue?.kind === "resolve" &&
+    tableCue.card === "Baron" &&
+    tableCue.comparisonCards &&
+    (tableCue.actorId === opponent?.id
+      ? tableCue.comparisonCards.actor
+      : tableCue.targetId === opponent?.id
+        ? tableCue.comparisonCards.target
+        : undefined);
+  const revealedBotCard = priestRevealsBot || baronRevealsBot;
+  const botHandCardCount = Math.max(
+    baronRevealsBot ? 1 : 0,
+    opponentState?.hand.length ?? 0,
+  );
   const playedHumanCardIndex = humanIsPlaying
     ? view.myHand.findIndex((card) => card === tableCue?.card)
     : -1;
@@ -793,6 +970,10 @@ export function App() {
     (tableCue?.kind === "resolve" &&
       tableCue.card === "Handmaid" &&
       tableCue.actorId === opponent?.id);
+  const receivingPrinceDiscardId =
+    tableCue?.kind === "resolve" && tableCue.card === "Prince" && tableCue.discardedCard
+      ? tableCue.targetId
+      : null;
 
   const historyCards = useMemo(() => {
     if (historyPlayerId === null) {
@@ -840,9 +1021,14 @@ export function App() {
       return;
     }
 
+    const resolutionDuration =
+      action.card === "Priest" || action.card === "Baron"
+        ? HAND_REVEAL_CUE_MS
+        : RESOLVE_CUE_MS;
+
     queueTimeout(() => {
       finishSequence(null);
-    }, action.card === "Priest" ? PRIEST_REVEAL_MS : RESOLVE_CUE_MS);
+    }, resolutionDuration);
   }
 
   function playActionWithSequence(sourceState: GameState, action: PlayCardAction) {
@@ -851,7 +1037,7 @@ export function App() {
     setTableCue({
       ...getPlayCue(action),
       kind: "reveal",
-      title: `${playerLabel(action.playerId)} reveals ${action.card}`,
+      title: `${playerAction(action.playerId, "reveal", "reveals")} ${action.card}`,
       detail: "The chosen card turns face up.",
     });
 
@@ -892,7 +1078,7 @@ export function App() {
     setTableCue({
       kind: "draw",
       actorId: activePlayer.id,
-      title: `${playerLabel(activePlayer.id)} draws`,
+      title: playerAction(activePlayer.id, "draw", "draws"),
       detail: "A card slides from the deck into the hand.",
     });
 
@@ -970,7 +1156,7 @@ export function App() {
     setTableCue(null);
     setPendingChoices(null);
     setHistoryPlayerId(null);
-    botRef.current = createRandomBot(createSeed());
+    botRef.current = createSimpleBot(createSeed());
     setState(createGame());
   }
 
@@ -1009,31 +1195,29 @@ export function App() {
               <span className="zone-label">Opponent</span>
               <h2>{opponent?.name ?? "Bot"}</h2>
             </div>
-            <button
-              className="pile-stack pile-stack-opponent"
+            <DiscardPileButton
+              cards={opponent?.discardPile ?? []}
+              label="Bot discard"
               onClick={() => setHistoryPlayerId(opponent?.id ?? 1)}
-              type="button"
-            >
-              <span>{opponent?.discardPile.length ?? 0}</span>
-              <strong>{opponent?.discardPile[opponent.discardPile.length - 1] ?? "Pile"}</strong>
-            </button>
+              receiving={receivingPrinceDiscardId === opponent?.id}
+            />
           </div>
           <div className="opponent-hand" aria-label="Bot hand">
-            {!opponent?.eliminated &&
-              Array.from({ length: 2 }).map((_, index) => {
-                const isSelectedCard = botIsPlaying && index === 1;
+            {botHandCardCount > 0 &&
+              Array.from({ length: botHandCardCount }).map((_, index) => {
+                const isSelectedCard = botIsPlaying && index === botHandCardCount - 1;
                 const slotClass = isSelectedCard
                   ? tableCue?.kind === "reveal"
                     ? "hand-card-slot-revealing"
                     : "hand-card-slot-playing hand-card-slot-playing-bot"
-                  : priestRevealsBot && index === 0
-                    ? "hand-card-slot-priest-reveal"
+                  : revealedBotCard && index === 0
+                    ? `hand-card-slot-${baronRevealsBot ? "baron" : "priest"}-reveal`
                     : "";
 
                 return (
                   <div className={`hand-card-slot ${slotClass}`} key={`bot-card-${index}`}>
-                    {priestRevealsBot && index === 0 ? (
-                      <CardFace card={priestRevealsBot} size="small" />
+                    {revealedBotCard && index === 0 ? (
+                      <CardFace card={revealedBotCard} size="small" />
                     ) : isSelectedCard && activeBotCard ? (
                       <CardFace card={activeBotCard} size="small" />
                     ) : (
@@ -1059,6 +1243,11 @@ export function App() {
                 <CardBack />
               </div>
             )}
+          </div>
+
+          <div className="burn-area" aria-label="Burn card">
+            <span className="burn-label">Burn</span>
+            {state.burnedCard ? <CardBack /> : <div className="burn-empty">Used</div>}
           </div>
 
           <div
@@ -1117,14 +1306,12 @@ export function App() {
         <section className="player-zone" aria-label="Your area">
           {showHumanShield && <ShieldAura />}
           <div className="player-tools">
-            <button
-              className="pile-stack pile-stack-player"
+            <DiscardPileButton
+              cards={me?.discardPile ?? []}
+              label="Your discard"
               onClick={() => setHistoryPlayerId(HUMAN_PLAYER_INDEX)}
-              type="button"
-            >
-              <span>{me?.discardPile.length ?? 0}</span>
-              <strong>{me?.discardPile[me.discardPile.length - 1] ?? "Pile"}</strong>
-            </button>
+              receiving={receivingPrinceDiscardId === HUMAN_PLAYER_INDEX}
+            />
             <button className="reset-button" onClick={handleResetGame} type="button">
               Reset
             </button>

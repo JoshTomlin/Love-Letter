@@ -127,6 +127,35 @@ describe("applyAction", () => {
     });
   });
 
+  it("makes Prince discard and replace the player's hand when the opponent is protected", () => {
+    const state = createTestState({
+      players: [
+        createPlayer(0, "You", ["Prince", "King"]),
+        createPlayer(1, "Bot", ["Guard"], {
+          protected: true,
+          seenCards: { 0: "King" },
+        }),
+      ],
+      deck: ["Priest", "Baron"],
+    });
+
+    const nextState = applyAction(state, {
+      type: "play-card",
+      playerId: 0,
+      card: "Prince",
+      targetId: 0,
+    });
+
+    expect(nextState.players[0].hand).toEqual(["Priest"]);
+    expect(nextState.players[1].hand).toEqual(["Guard"]);
+    expect(nextState.players[1].seenCards[0]).toBeUndefined();
+    expect(nextState.discardPile).toContainEqual({
+      playerId: 0,
+      card: "King",
+      faceUp: true,
+    });
+  });
+
   it("eliminates a player who plays Princess", () => {
     const state = createTestState({
       players: [
@@ -187,6 +216,27 @@ describe("applyAction", () => {
 
     expect(nextState.players[0].hand).toEqual(["Princess"]);
     expect(nextState.players[1].hand).toEqual(["Guard"]);
+    expect(nextState.players[0].seenCards[1]).toBe("Guard");
+    expect(nextState.players[1].seenCards[0]).toBe("Princess");
+  });
+
+  it("does not swap hands with a protected player", () => {
+    const state = createTestState({
+      players: [
+        createPlayer(0, "You", ["King", "Guard"]),
+        createPlayer(1, "Bot", ["Princess"], { protected: true }),
+      ],
+    });
+
+    const nextState = applyAction(state, {
+      type: "play-card",
+      playerId: 0,
+      card: "King",
+    });
+
+    expect(nextState.players[0].hand).toEqual(["Guard"]);
+    expect(nextState.players[1].hand).toEqual(["Princess"]);
+    expect(nextState.currentPlayerIndex).toBe(1);
   });
 
   it("ends the round on deck exhaustion using discard total as a tiebreaker", () => {

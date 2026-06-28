@@ -103,8 +103,10 @@ export type PlayerAction = PlayCardAction | StartNextRoundAction;
 export type PlayerView = {
   myIndex: number;
   myHand: Card[];
+  knownCards: Partial<Record<number, Card>>;
   players: PublicPlayerState[];
   publicDiscardPile: DiscardEntry[];
+  visibleBurnedCards: Card[];
   cardsRemaining: number;
   currentPlayerIndex: number;
   phase: RoundPhase;

@@ -60,6 +60,19 @@ describe("getLegalActions", () => {
     expect(actions).toHaveLength(7);
   });
 
+  it("forces Prince to target the player when every opponent is protected", () => {
+    const state = createState(["Prince", "Guard"]);
+    state.players[1].protected = true;
+
+    const actions = getLegalActions(state).filter(
+      (action) => action.type === "play-card" && action.card === "Prince",
+    );
+
+    expect(actions).toEqual([
+      { type: "play-card", playerId: 0, card: "Prince", targetId: 0 },
+    ]);
+  });
+
   it("offers no actions after the game is over", () => {
     const state = createState(["Guard", "Priest"]);
     state.phase = "game-over";

@@ -13,6 +13,7 @@ export function getPlayerView(state: GameState, playerIndex: number): PlayerView
   return {
     myIndex: playerIndex,
     myHand: [...me.hand],
+    knownCards: { ...me.seenCards },
     players: state.players.map((player) => ({
       id: player.id,
       name: player.name,
@@ -25,6 +26,7 @@ export function getPlayerView(state: GameState, playerIndex: number): PlayerView
       tokens: player.tokens,
     })),
     publicDiscardPile: state.discardPile.filter((entry) => entry.faceUp),
+    visibleBurnedCards: [...state.visibleBurnedCards],
     cardsRemaining: state.deck.length,
     currentPlayerIndex: state.currentPlayerIndex,
     phase: state.phase,

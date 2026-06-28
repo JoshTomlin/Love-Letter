@@ -51,6 +51,7 @@ export function applyAction(state: GameState, action: PlayerAction): GameState {
     ],
   };
 
+  nextState = updateKnownCardAfterPlay(nextState, action.playerId);
   nextState = resolveCardEffect(nextState, action);
 
   if (hasOneActivePlayer(nextState.players)) {
@@ -214,6 +215,7 @@ function resolvePrince(state: GameState, action: PlayCardAction) {
     ...player,
     hand: [],
   }));
+  nextState = clearKnownCard(nextState, target.id);
   nextState = {
     ...nextState,
     discardPile: [
@@ -251,7 +253,7 @@ function resolveKing(state: GameState, action: PlayCardAction) {
   const actorHand = [...actor.hand];
   const targetHand = [...target.hand];
 
-  return {
+  let nextState: GameState = {
     ...state,
     players: state.players.map((player) => {
       if (player.id === actor.id) {
@@ -260,6 +262,29 @@ function resolveKing(state: GameState, action: PlayCardAction) {
 
       if (player.id === target.id) {
         return { ...player, hand: actorHand };
+      }
+
+      return player;
+    }),
+  };
+
+  nextState = clearKnownCard(clearKnownCard(nextState, actor.id), target.id);
+
+  return {
+    ...nextState,
+    players: nextState.players.map((player) => {
+      if (player.id === actor.id && actorHand[0]) {
+        return {
+          ...player,
+          seenCards: { ...player.seenCards, [target.id]: actorHand[0] },
+        };
+      }
+
+      if (player.id === target.id && targetHand[0]) {
+        return {
+          ...player,
+          seenCards: { ...player.seenCards, [actor.id]: targetHand[0] },
+        };
       }
 
       return player;
@@ -416,6 +441,47 @@ function updatePlayer(
       player.id === playerId ? updater(player) : player,
     ),
   };
+}
+
+function updateKnownCardAfterPlay(state: GameState, playerId: number): GameState {
+  const player = getPlayerById(state, playerId);
+  if (!player) {
+    return state;
+  }
+
+  return {
+    ...state,
+    players: state.players.map((observer) => {
+      const knownCard = observer.seenCards[playerId];
+      if (!knownCard || player.hand.includes(knownCard)) {
+        return observer;
+      }
+
+      return {
+        ...observer,
+        seenCards: removeKnownCard(observer.seenCards, playerId),
+      };
+    }),
+  };
+}
+
+function clearKnownCard(state: GameState, playerId: number): GameState {
+  return {
+    ...state,
+    players: state.players.map((player) => ({
+      ...player,
+      seenCards: removeKnownCard(player.seenCards, playerId),
+    })),
+  };
+}
+
+function removeKnownCard(
+  seenCards: PlayerState["seenCards"],
+  playerId: number,
+) {
+  const nextSeenCards = { ...seenCards };
+  delete nextSeenCards[playerId];
+  return nextSeenCards;
 }
 
 function assertNever(value: never): never {
