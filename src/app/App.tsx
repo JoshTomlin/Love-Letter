@@ -16,9 +16,12 @@ import type {
 } from "../engine/types";
 
 const HUMAN_PLAYER_INDEX = 0;
+// Turn visuals are staged without changing engine timing.
+const REVEAL_CUE_MS = 800;
 const DRAW_CUE_MS = 950;
-const PLAY_CUE_MS = 1050;
-const RESOLVE_CUE_MS = 1350;
+const PLAY_CUE_MS = 850;
+const RESOLVE_CUE_MS = 1650;
+const PRIEST_REVEAL_MS = 2400;
 
 const CARD_TEXT: Record<Card, string> = {
   Guard: "Name a card. Correct guesses eliminate.",
@@ -34,16 +37,118 @@ const CARD_TEXT: Record<Card, string> = {
 type CardPlayedEvent = Extract<PublicGameEvent, { type: "card-played" }>;
 type CueTone = "neutral" | "success" | "danger";
 type TableCue = {
-  kind: "draw" | "play" | "resolve" | "win";
+  kind: "draw" | "reveal" | "play" | "resolve" | "win";
   actorId?: number;
   card?: Card;
   targetId?: number;
+  revealedCard?: Card;
   title: string;
   detail: string;
   speech?: string;
   response?: string;
   tone?: CueTone;
 };
+
+const MOBILE_BOARD_STYLES = String.raw`
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+body { overscroll-behavior: none; }
+.hand-card-slot { position: relative; min-width: 0; min-height: 0; transform-style: preserve-3d; }
+.hand-card-slot > .card-face, .hand-card-slot > .card-back { width: 100%; height: 100%; min-height: 0; }
+.player-tools { display: flex; align-items: center; justify-content: flex-end; gap: .45rem; min-height: 2rem; }
+.reset-button { min-height: 1.8rem; padding: .25rem .5rem; border: 0; border-radius: 8px; background: rgba(248,242,232,.1); color: rgba(248,242,232,.82); font: inherit; font-size: .68rem; cursor: pointer; }
+@media (max-width: 719px) {
+  .game-shell { display: grid; grid-template-rows: auto minmax(0,1fr); width: min(100%,430px); height: 100vh; height: 100dvh; min-height: 0; padding: calc(.35rem + env(safe-area-inset-top)) .55rem calc(.4rem + env(safe-area-inset-bottom)); overflow: hidden; }
+  .score-bar { min-height: 2.6rem; margin: 0; }
+  .score-name, .game-title small, .zone-label, .stage-label { font-size: .64rem; }
+  .score-side strong { font-size: 1rem; }
+  .game-title span { font-size: 1.15rem; }
+  .table-surface { grid-template-rows: minmax(0,.78fr) minmax(0,1.08fr) minmax(0,1.28fr); gap: .35rem; min-height: 0; height: 100%; overflow: hidden; }
+  .opponent-zone, .player-zone, .center-table { position: relative; min-width: 0; min-height: 0; }
+  .opponent-zone { display: grid; grid-template-rows: auto minmax(0,1fr); }
+  .player-zone { display: grid; grid-template-rows: auto minmax(0,1fr) auto; }
+  .zone-row, .player-tools { min-height: 2rem; margin: 0; }
+  .zone-row h2 { font-size: .86rem; line-height: 1; }
+  .opponent-hand, .player-hand { display: flex; align-items: center; justify-content: center; gap: .5rem; min-width: 0; min-height: 0; padding: .1rem 0; perspective: 900px; }
+  .hand-card-slot { flex: 0 1 auto; height: 100%; aspect-ratio: 5 / 7; }
+  .opponent-hand .hand-card-slot { max-height: 8.4rem; }
+  .player-hand .hand-card-slot { max-width: calc(50% - .25rem); max-height: 14.5rem; }
+  .card-face-large, .card-face-small { min-height: 0; }
+  .card-face { gap: .12rem; padding: clamp(.25rem,1.7vmin,.5rem); }
+  .card-face::before { inset: .24rem; }
+  .card-corner { width: clamp(1.2rem,4.8vmin,1.55rem); height: clamp(1.2rem,4.8vmin,1.55rem); font-size: clamp(.72rem,2.7vmin,.9rem); }
+  .card-name { font-size: clamp(.72rem,3.3vmin,1rem); line-height: 1; }
+  .card-text { display: none; }
+  .card-illustration { width: min(4.7rem,70%); max-height: 100%; }
+  .card-back { padding: .3rem; }
+  .card-back-frame span { width: clamp(1.7rem,8vmin,2.7rem); height: clamp(1.7rem,8vmin,2.7rem); font-size: clamp(.68rem,3vmin,.95rem); }
+  .pile-stack { min-width: 4.8rem; max-width: 7rem; min-height: 1.8rem; padding: .25rem .38rem; }
+  .pile-stack span { width: 1.3rem; height: 1.3rem; font-size: .7rem; }
+  .pile-stack strong { font-size: .68rem; }
+  .center-table { grid-template-columns: 4.15rem minmax(0,1fr); grid-template-rows: minmax(0,1fr) auto; grid-template-areas: "deck stage" "prompt prompt"; gap: .35rem; align-items: center; align-content: stretch; padding: .18rem 0; }
+  .deck-area > .card-back { height: auto; }
+  .deck-area > span { width: 1.45rem; height: 1.45rem; font-size: .72rem; }
+  .turn-stage { grid-template-columns: minmax(4.2rem,5.25rem) minmax(0,1fr); gap: .35rem; width: 100%; height: 100%; min-height: 0; padding: .1rem; }
+  .turn-stage .stage-label { align-self: end; }
+  .turn-stage .card-face, .turn-stage .card-back, .turn-stage .empty-stage { align-self: center; width: 100%; height: auto; min-height: 0; max-height: 8.2rem; }
+  .empty-stage { font-size: .72rem; }
+  .stage-owner { padding: .25rem .42rem; font-size: .72rem; }
+  .prompt-panel { display: flex; align-items: center; justify-content: center; gap: .38rem; min-height: 2.35rem; padding: .35rem .5rem; text-align: center; }
+  .prompt-panel strong { font-size: .86rem; }
+  .prompt-detail, .prompt-panel small { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .prompt-panel em { padding: .2rem .38rem; font-size: .72rem; }
+  .intel-strip { position: absolute; z-index: 7; right: .2rem; bottom: 2.75rem; justify-content: end; }
+  .intel-strip span { padding: .25rem .38rem; color: #172d33; background: rgba(228,197,122,.92); font-size: .66rem; font-weight: 700; }
+  .pile-stack-player { margin: 0; }
+  .action-row { position: absolute; z-index: 14; left: 50%; bottom: .35rem; width: min(80%,18rem); margin: 0; transform: translateX(-50%); }
+}
+@media (max-height: 700px) and (max-width: 719px) {
+  .game-shell { padding-top: calc(.2rem + env(safe-area-inset-top)); padding-bottom: calc(.2rem + env(safe-area-inset-bottom)); }
+  .score-bar { min-height: 2.2rem; }
+  .table-surface { gap: .2rem; }
+  .zone-row, .player-tools { min-height: 1.7rem; }
+  .center-table { grid-template-columns: 3.7rem minmax(0,1fr); }
+  .prompt-panel { min-height: 2rem; padding-block: .22rem; }
+}`;
+
+const MOBILE_EFFECT_STYLES = String.raw`
+.cue-bubbles { position: absolute; z-index: 12; left: 0; right: 0; display: grid; gap: .3rem; pointer-events: none; }
+.cue-bubbles-bot { top: -.25rem; justify-items: start; }
+.cue-bubbles-you { bottom: 2.75rem; justify-items: end; }
+.speech-bubble { width: fit-content; max-width: min(88%,17rem); padding: .5rem .68rem; border-radius: 8px; font-size: clamp(.84rem,3.8vmin,1.05rem); line-height: 1.15; box-shadow: 0 .45rem .8rem rgba(2,8,10,.25); animation: bubble-in 220ms ease; }
+.speech-bubble-actor { background: #f0d17f; color: #172d33; font-weight: 700; }
+.speech-bubble-response { background: #f8f2e8; color: #172d33; font-weight: 700; }
+.speech-bubble-success { background: #5dbf7e; color: #082219; }
+.speech-bubble-danger { background: #ec5656; color: #fff8ed; }
+.action-effect { position: absolute; z-index: 11; left: 59%; top: 40%; display: grid; place-items: center; min-width: 4.5rem; min-height: 4.5rem; border-radius: 999px; color: #f8f2e8; font-family: Georgia,"Times New Roman",serif; font-size: 1rem; font-weight: 700; text-shadow: 0 2px 4px rgba(2,8,10,.42); transform: translate(-50%,-50%); pointer-events: none; animation: effect-burst 650ms cubic-bezier(.2,.85,.25,1) both; }
+.action-effect-priest svg { width: 6.5rem; filter: drop-shadow(0 0 .6rem rgba(106,164,184,.9)); }
+.action-effect-priest path, .action-effect-priest circle { fill: rgba(106,164,184,.22); stroke: #d9f4ff; stroke-width: 4; }
+.action-effect-guard { border: 3px solid #f0d17f; background: rgba(109,31,32,.88); font-size: 2.4rem; }
+.action-effect-baron, .action-effect-prince, .action-effect-king, .action-effect-princess { border: 2px solid rgba(248,242,232,.76); background: rgba(3,18,20,.78); }
+.action-effect-handmaid { border: 3px solid #f0d17f; background: rgba(53,90,45,.9); font-size: .68rem; }
+.action-effect-win { width: 7rem; height: 7rem; border: 3px solid #f5c84b; background: rgba(93,63,20,.72); box-shadow: 0 0 2rem rgba(245,200,75,.68); }
+.effect-crown { font-size: 2.4rem; }
+.action-effect-win i { position: absolute; width: .45rem; height: .45rem; border-radius: 999px; background: #f5c84b; animation: win-orbit 1200ms linear infinite; }
+.action-effect-win i:nth-of-type(2) { animation-delay: -400ms; }
+.action-effect-win i:nth-of-type(3) { animation-delay: -800ms; }
+.shield-aura { position: absolute; z-index: 9; left: 50%; top: 54%; width: min(42%,8.5rem); transform: translate(-50%,-50%); pointer-events: none; }
+.shield-aura svg { width: 100%; overflow: visible; fill: rgba(245,200,75,.16); stroke: #f5d76e; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 .7rem rgba(245,200,75,.75)); animation: shield-pulse 1000ms ease-in-out infinite alternate; }
+.hand-card-slot-revealing { z-index: 7; animation: reveal-in-hand 800ms ease both; }
+.hand-card-slot-playing { z-index: 8; pointer-events: none; }
+.hand-card-slot-playing-bot { animation: bot-card-to-table 850ms cubic-bezier(.25,.78,.28,1) both; }
+.hand-card-slot-playing-you { animation: player-card-to-table 850ms cubic-bezier(.25,.78,.28,1) both; }
+.hand-card-slot-priest-reveal { z-index: 10; animation: priest-card-flip 500ms ease both, priest-card-glow 800ms 500ms ease-in-out infinite alternate; }
+.table-surface-bot-thinking .opponent-hand .hand-card-slot:not(.hand-card-slot-revealing) { animation: bot-think 780ms ease-in-out infinite alternate; }
+.table-surface-bot-thinking .opponent-hand .hand-card-slot:nth-child(2) { animation-delay: -390ms; }
+@keyframes reveal-in-hand { 0% { transform: rotateY(0) scale(1); } 48% { transform: rotateY(88deg) scale(1.08); } 52% { transform: rotateY(92deg) scale(1.08); } 100% { transform: rotateY(360deg) scale(1.05); filter: brightness(1.12); } }
+@keyframes priest-card-flip { from { transform: rotateY(90deg); } to { transform: rotateY(360deg); } }
+@keyframes priest-card-glow { from { filter: drop-shadow(0 0 .2rem rgba(217,244,255,.4)); } to { filter: drop-shadow(0 0 .9rem rgba(217,244,255,1)); } }
+@keyframes bot-card-to-table { 0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1.04); } 75% { opacity: 1; transform: translate(-1.2rem,20vh) rotate(-5deg) scale(.84); } 100% { opacity: 0; transform: translate(-1.2rem,20vh) rotate(-5deg) scale(.84); } }
+@keyframes player-card-to-table { 0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1.04); } 75% { opacity: 1; transform: translate(.8rem,-24vh) rotate(5deg) scale(.68); } 100% { opacity: 0; transform: translate(.8rem,-24vh) rotate(5deg) scale(.68); } }
+@keyframes effect-burst { 0% { opacity: 0; transform: translate(-50%,-50%) scale(.35) rotate(-18deg); } 70% { opacity: 1; transform: translate(-50%,-50%) scale(1.12) rotate(3deg); } 100% { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
+@keyframes shield-pulse { from { opacity: .72; transform: scale(.94); } to { opacity: 1; transform: scale(1.05); } }
+@keyframes win-orbit { from { transform: rotate(0) translateX(4.3rem) rotate(0); } to { transform: rotate(360deg) translateX(4.3rem) rotate(-360deg); } }
+@media (prefers-reduced-motion: reduce) { .hand-card-slot, .action-effect, .shield-aura svg { animation-duration: 1ms !important; } }
+`;
 
 function playerLabel(playerId: number) {
   return playerId === HUMAN_PLAYER_INDEX ? "You" : "Bot";
@@ -100,10 +205,14 @@ function formatEvent(event: PublicGameEvent) {
   return `${playerLabel(event.winnerId)} won by ${formatReason(event.reason)}.`;
 }
 
+function createSeed() {
+  return Math.floor(Math.random() * 2_147_483_647) || 1;
+}
+
 function createGame() {
   return createInitialGame({
     playerNames: ["You", "Bot"],
-    seed: 1,
+    seed: createSeed(),
   });
 }
 
@@ -215,10 +324,6 @@ function getChoiceLabel(action: PlayCardAction) {
 }
 
 function getChoiceHint(action: PlayCardAction) {
-  if (action.card === "Guard") {
-    return "A correct guess eliminates the bot.";
-  }
-
   if (action.card === "Prince" && action.targetId === HUMAN_PLAYER_INDEX) {
     return "You discard and redraw.";
   }
@@ -296,6 +401,10 @@ function getResolveCue(before: GameState, after: GameState, action: PlayCardActi
         action.playerId === HUMAN_PLAYER_INDEX && reveal?.type === "card-revealed"
           ? `You saw ${playerLabel(reveal.targetId)} holding ${reveal.card}.`
           : `${actor} looked at ${target ?? "the target"}'s hand.`,
+      revealedCard:
+        action.playerId === HUMAN_PLAYER_INDEX && reveal?.type === "card-revealed"
+          ? reveal.card
+          : undefined,
       tone: "success",
     };
   }
@@ -499,27 +608,29 @@ function CardIllustration({ card }: { card: Card }) {
 
 function CardFace({
   card,
+  className = "",
   disabled = false,
   onClick,
   size = "large",
 }: {
   card: Card;
+  className?: string;
   disabled?: boolean;
   onClick?: () => void;
   size?: "large" | "small";
 }) {
-  const className = `card-face card-face-${cardClass(card)} card-face-${size}`;
+  const cardFaceClassName = `card-face card-face-${cardClass(card)} card-face-${size} ${className}`.trim();
 
   if (onClick) {
     return (
-      <button className={className} disabled={disabled} onClick={onClick} type="button">
+      <button className={cardFaceClassName} disabled={disabled} onClick={onClick} type="button">
         <CardContents card={card} />
       </button>
     );
   }
 
   return (
-    <div className={className}>
+    <div className={cardFaceClassName}>
       <CardContents card={card} />
     </div>
   );
@@ -546,6 +657,68 @@ function CardBack({ stacked = false }: { stacked?: boolean }) {
   );
 }
 
+function ActionEffect({ cue }: { cue: TableCue | null }) {
+  if (!cue || (cue.kind !== "resolve" && cue.kind !== "win")) {
+    return null;
+  }
+
+  if (cue.kind === "win") {
+    return (
+      <div className="action-effect action-effect-win" aria-hidden="true">
+        <span className="effect-crown">W</span>
+        <i />
+        <i />
+        <i />
+      </div>
+    );
+  }
+
+  const labels: Partial<Record<Card, string>> = {
+    Baron: "VS",
+    Handmaid: "SHIELD",
+    Prince: "DISCARD",
+    King: "SWAP",
+    Princess: "OUT",
+  };
+
+  if (cue.card === "Priest") {
+    return (
+      <div className="action-effect action-effect-priest" aria-hidden="true">
+        <svg viewBox="0 0 120 70">
+          <path d="M8 35 C30 5 90 5 112 35 C90 65 30 65 8 35 Z" />
+          <circle cx="60" cy="35" r="16" />
+          <circle cx="60" cy="35" r="6" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (cue.card === "Guard") {
+    return <div className="action-effect action-effect-guard" aria-hidden="true">?</div>;
+  }
+
+  if (cue.card && labels[cue.card]) {
+    return (
+      <div className={`action-effect action-effect-${cardClass(cue.card)}`} aria-hidden="true">
+        {labels[cue.card]}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function ShieldAura() {
+  return (
+    <div className="shield-aura" aria-label="Protected by Handmaid">
+      <svg aria-hidden="true" viewBox="0 0 100 112">
+        <path d="M50 5 L92 20 V54 C92 82 74 103 50 109 C26 103 8 82 8 54 V20 Z" />
+        <path d="M50 22 V88 M29 48 H71" />
+      </svg>
+    </div>
+  );
+}
+
 export function App() {
   const [state, setState] = useState(createGame);
   const [pendingChoices, setPendingChoices] = useState<PlayCardAction[] | null>(null);
@@ -554,7 +727,10 @@ export function App() {
   const [isSequencing, setIsSequencing] = useState(false);
   const sequenceInProgressRef = useRef(false);
   const timeoutsRef = useRef<number[]>([]);
-  const botRef = useRef(createRandomBot(99));
+  const botRef = useRef<ReturnType<typeof createRandomBot> | null>(null);
+  if (botRef.current === null) {
+    botRef.current = createRandomBot(createSeed());
+  }
   const view = getPlayerView(state, HUMAN_PLAYER_INDEX);
   const legalActions = getLegalActions(state);
   const currentPlayer = state.players[state.currentPlayerIndex];
@@ -575,11 +751,16 @@ export function App() {
     state.roundWinnerId,
     state.gameWinnerId,
   );
-  const stageCard = tableCue?.card ?? lastPlayedEvent?.card ?? null;
+  const stageCard =
+    tableCue?.kind === "draw" || tableCue?.kind === "reveal"
+      ? null
+      : tableCue?.card ?? lastPlayedEvent?.card ?? null;
   const stageActorId = tableCue?.actorId ?? lastPlayedEvent?.playerId ?? null;
   const stageLabel = tableCue
     ? tableCue.kind === "draw"
       ? `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} draws`
+      : tableCue.kind === "reveal"
+        ? `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} reveals`
       : tableCue.kind === "win"
         ? "Round result"
         : `${playerLabel(tableCue.actorId ?? HUMAN_PLAYER_INDEX)} ${tableCue.kind === "play" ? "plays" : "resolves"}`
@@ -587,6 +768,31 @@ export function App() {
       ? `${playerLabel(lastPlayedEvent.playerId)} played`
       : "Opening deal";
   const tableCueTone = tableCue?.tone ?? "neutral";
+  const botIsPlaying =
+    tableCue?.actorId === opponent?.id &&
+    (tableCue?.kind === "reveal" || tableCue?.kind === "play");
+  const humanIsPlaying =
+    tableCue?.actorId === HUMAN_PLAYER_INDEX &&
+    (tableCue?.kind === "reveal" || tableCue?.kind === "play");
+  const activeBotCard = botIsPlaying ? tableCue?.card : undefined;
+  const priestRevealsBot =
+    tableCue?.kind === "resolve" &&
+    tableCue.card === "Priest" &&
+    tableCue.targetId === opponent?.id &&
+    tableCue.revealedCard;
+  const playedHumanCardIndex = humanIsPlaying
+    ? view.myHand.findIndex((card) => card === tableCue?.card)
+    : -1;
+  const showHumanShield =
+    Boolean(me?.protected) ||
+    (tableCue?.kind === "resolve" &&
+      tableCue.card === "Handmaid" &&
+      tableCue.actorId === HUMAN_PLAYER_INDEX);
+  const showBotShield =
+    Boolean(opponent?.protected) ||
+    (tableCue?.kind === "resolve" &&
+      tableCue.card === "Handmaid" &&
+      tableCue.actorId === opponent?.id);
 
   const historyCards = useMemo(() => {
     if (historyPlayerId === null) {
@@ -626,7 +832,7 @@ export function App() {
     setTableCue(nextCue);
   }
 
-  function finishActionSequence(nextState: GameState) {
+  function finishActionSequence(nextState: GameState, action: PlayCardAction) {
     if (nextState.phase === "round-over" || nextState.phase === "game-over") {
       queueTimeout(() => {
         finishSequence(getWinCue(nextState));
@@ -636,25 +842,35 @@ export function App() {
 
     queueTimeout(() => {
       finishSequence(null);
-    }, RESOLVE_CUE_MS);
+    }, action.card === "Priest" ? PRIEST_REVEAL_MS : RESOLVE_CUE_MS);
   }
 
   function playActionWithSequence(sourceState: GameState, action: PlayCardAction) {
     startSequence();
     setPendingChoices(null);
-    setTableCue(getPlayCue(action));
+    setTableCue({
+      ...getPlayCue(action),
+      kind: "reveal",
+      title: `${playerLabel(action.playerId)} reveals ${action.card}`,
+      detail: "The chosen card turns face up.",
+    });
 
     queueTimeout(() => {
-      const nextState = applyAction(sourceState, action);
-      setState(nextState);
-      setTableCue(getResolveCue(sourceState, nextState, action));
-      finishActionSequence(nextState);
-    }, PLAY_CUE_MS);
+      setTableCue(getPlayCue(action));
+
+      queueTimeout(() => {
+        const nextState = applyAction(sourceState, action);
+        setState(nextState);
+        setTableCue(getResolveCue(sourceState, nextState, action));
+        finishActionSequence(nextState, action);
+      }, PLAY_CUE_MS);
+    }, REVEAL_CUE_MS);
   }
 
   useEffect(() => {
     return () => {
       clearQueuedTimeouts();
+      sequenceInProgressRef.current = false;
     };
   }, []);
 
@@ -701,7 +917,12 @@ export function App() {
 
     const botView = getPlayerView(state, state.currentPlayerIndex);
     const botActions = getLegalActions(state);
-    const botAction = botRef.current.chooseAction(botView, botActions);
+    const bot = botRef.current;
+    if (!bot) {
+      return;
+    }
+
+    const botAction = bot.chooseAction(botView, botActions);
     playActionWithSequence(state, botAction as PlayCardAction);
   }, [currentPlayer?.id, isSequencing, state]);
 
@@ -749,11 +970,14 @@ export function App() {
     setTableCue(null);
     setPendingChoices(null);
     setHistoryPlayerId(null);
+    botRef.current = createRandomBot(createSeed());
     setState(createGame());
   }
 
   return (
-    <main className="game-shell">
+    <>
+      <style>{MOBILE_BOARD_STYLES + MOBILE_EFFECT_STYLES}</style>
+      <main className="game-shell">
       <header className="score-bar">
         <div className="score-side">
           <span className="score-name">You</span>
@@ -779,6 +1003,7 @@ export function App() {
         }`}
       >
         <section className="opponent-zone" aria-label="Opponent area">
+          {showBotShield && <ShieldAura />}
           <div className="zone-row">
             <div>
               <span className="zone-label">Opponent</span>
@@ -794,9 +1019,29 @@ export function App() {
             </button>
           </div>
           <div className="opponent-hand" aria-label="Bot hand">
-            {Array.from({ length: opponent?.handSize ?? 0 }).map((_, index) => (
-              <CardBack key={`bot-card-${index}`} />
-            ))}
+            {!opponent?.eliminated &&
+              Array.from({ length: 2 }).map((_, index) => {
+                const isSelectedCard = botIsPlaying && index === 1;
+                const slotClass = isSelectedCard
+                  ? tableCue?.kind === "reveal"
+                    ? "hand-card-slot-revealing"
+                    : "hand-card-slot-playing hand-card-slot-playing-bot"
+                  : priestRevealsBot && index === 0
+                    ? "hand-card-slot-priest-reveal"
+                    : "";
+
+                return (
+                  <div className={`hand-card-slot ${slotClass}`} key={`bot-card-${index}`}>
+                    {priestRevealsBot && index === 0 ? (
+                      <CardFace card={priestRevealsBot} size="small" />
+                    ) : isSelectedCard && activeBotCard ? (
+                      <CardFace card={activeBotCard} size="small" />
+                    ) : (
+                      <CardBack />
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </section>
 
@@ -833,16 +1078,22 @@ export function App() {
             )}
           </div>
 
-          <div className={`prompt-panel prompt-panel-${tableCueTone}`}>
+          <ActionEffect cue={tableCue} />
+
+          <div className={`prompt-panel prompt-panel-${tableCueTone}`} aria-live="polite">
             <strong>{tableCue?.title ?? prompt.title}</strong>
-            <span>{tableCue?.detail ?? prompt.detail}</span>
+            <span className="prompt-detail">{tableCue?.detail ?? prompt.detail}</span>
             {tableCue?.response && <em>{tableCue.response}</em>}
             {!tableCue && latestPublicEvent && <small>{formatEvent(latestPublicEvent)}</small>}
             {tableCue?.kind === "win" && <div className="win-flash" aria-hidden="true" />}
           </div>
 
           {tableCue?.speech && (
-            <div className="cue-bubbles">
+            <div
+              className={`cue-bubbles cue-bubbles-${
+                tableCue.actorId === HUMAN_PLAYER_INDEX ? "you" : "bot"
+              }`}
+            >
               <span className="speech-bubble speech-bubble-actor">{tableCue.speech}</span>
               {tableCue.response && (
                 <span className={`speech-bubble speech-bubble-response speech-bubble-${tableCueTone}`}>
@@ -864,50 +1115,63 @@ export function App() {
         </section>
 
         <section className="player-zone" aria-label="Your area">
-          <button
-            className="pile-stack pile-stack-player"
-            onClick={() => setHistoryPlayerId(HUMAN_PLAYER_INDEX)}
-            type="button"
-          >
-            <span>{me?.discardPile.length ?? 0}</span>
-            <strong>{me?.discardPile[me.discardPile.length - 1] ?? "Pile"}</strong>
-          </button>
+          {showHumanShield && <ShieldAura />}
+          <div className="player-tools">
+            <button
+              className="pile-stack pile-stack-player"
+              onClick={() => setHistoryPlayerId(HUMAN_PLAYER_INDEX)}
+              type="button"
+            >
+              <span>{me?.discardPile.length ?? 0}</span>
+              <strong>{me?.discardPile[me.discardPile.length - 1] ?? "Pile"}</strong>
+            </button>
+            <button className="reset-button" onClick={handleResetGame} type="button">
+              Reset
+            </button>
+          </div>
 
           <div className="player-hand" aria-label="Your hand">
             {view.myHand.map((card, index) => {
               const choices = getPlayOptions(legalActions, card);
               const playable = isHumanTurn && choices.length > 0 && !isSequencing;
 
+              const isSelectedCard = index === playedHumanCardIndex;
+              const slotClass = isSelectedCard
+                ? tableCue?.kind === "reveal"
+                  ? "hand-card-slot-revealing"
+                  : "hand-card-slot-playing hand-card-slot-playing-you"
+                : "";
+
               return (
-                <CardFace
-                  card={card}
-                  disabled={!playable}
-                  key={`${card}-${index}`}
-                  onClick={playable ? () => handleCardTap(card) : undefined}
-                />
+                <div className={`hand-card-slot ${slotClass}`} key={`${card}-${index}`}>
+                  <CardFace
+                    card={card}
+                    disabled={!playable}
+                    onClick={playable ? () => handleCardTap(card) : undefined}
+                  />
+                </div>
               );
             })}
           </div>
 
-          <div className="action-row">
-            {state.phase === "round-over" && !isSequencing && (
-              <button
-                className="primary-button"
-                onClick={() => handleAction({ type: "start-next-round" })}
-                type="button"
-              >
-                Next round
-              </button>
-            )}
-            {state.phase === "game-over" && !isSequencing && (
-              <button className="primary-button" onClick={handleResetGame} type="button">
-                New game
-              </button>
-            )}
-            <button className="ghost-button" onClick={handleResetGame} type="button">
-              Reset
-            </button>
-          </div>
+          {(state.phase === "round-over" || state.phase === "game-over") && (
+            <div className="action-row">
+              {state.phase === "round-over" && !isSequencing && (
+                <button
+                  className="primary-button"
+                  onClick={() => handleAction({ type: "start-next-round" })}
+                  type="button"
+                >
+                  Next round
+                </button>
+              )}
+              {state.phase === "game-over" && !isSequencing && (
+                <button className="primary-button" onClick={handleResetGame} type="button">
+                  New game
+                </button>
+              )}
+            </div>
+          )}
         </section>
       </section>
 
@@ -937,7 +1201,7 @@ export function App() {
                   type="button"
                 >
                   <strong>{getChoiceLabel(action)}</strong>
-                  <span>{getChoiceHint(action)}</span>
+                  {action.card !== "Guard" && <span>{getChoiceHint(action)}</span>}
                 </button>
               ))}
             </div>
@@ -982,6 +1246,7 @@ export function App() {
           </section>
         </div>
       )}
-    </main>
+      </main>
+    </>
   );
 }
