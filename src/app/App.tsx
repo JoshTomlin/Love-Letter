@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createSimpleBot } from "../bots/randomBot";
+import type { BotAnalysis } from "../bots/randomBot";
 import { CARD_VALUES, TOKENS_TO_WIN_BY_RULESET } from "../engine/constants";
 import { applyAction } from "../engine/applyAction";
 import { getLegalActions } from "../engine/legalActions";
@@ -229,7 +230,7 @@ function formatEvent(event: PublicGameEvent) {
   if (event.type === "card-played") {
     return `${playerLabel(event.playerId)} played ${event.card}${
       event.targetId === undefined ? "" : ` on ${playerLabel(event.targetId)}`
-    }.`;
+    }${event.guess === undefined ? "" : ` and guessed ${event.guess}`}.`;
   }
 
   if (event.type === "player-eliminated") {
@@ -374,6 +375,48 @@ function getChoiceHint(action: PlayCardAction) {
   }
 
   return CARD_TEXT[action.card];
+}
+
+function actionsMatch(left: PlayCardAction, right: PlayCardAction) {
+  return (
+    left.playerId === right.playerId &&
+    left.card === right.card &&
+    left.targetId === right.targetId &&
+    left.guess === right.guess
+  );
+}
+
+function formatAnalysisValue(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+}
+
+function formatAnalysisAction(action: PlayCardAction) {
+  if (action.card === "Guard" && action.guess) {
+    return `Guard → guess ${action.guess}`;
+  }
+
+  if (action.targetId !== undefined) {
+    return `${action.card} → ${playerLabel(action.targetId)}`;
+  }
+
+  return action.card;
+}
+
+function formatRangeEvaluation(entry: BotAnalysis["actions"][number]) {
+  const evaluation = entry.rangeEvaluation;
+
+  switch (entry.action.card) {
+    case "Guard":
+      return `${Math.round(evaluation.hitProbability * 100)}% hit`;
+    case "Baron":
+      return `${Math.round(evaluation.winProbability * 100)}% win / ${Math.round(evaluation.tieProbability * 100)}% tie / ${Math.round(evaluation.lossProbability * 100)}% lose`;
+    case "Prince":
+      return `${Math.round(evaluation.princessProbability * 100)}% Princess`;
+    case "King":
+      return `target value ${evaluation.expectedTargetValue.toFixed(1)}`;
+    default:
+      return null;
+  }
 }
 
 function getPlayCue(action: PlayCardAction): TableCue {
@@ -878,6 +921,8 @@ export function App() {
   const [state, setState] = useState(createGame);
   const [pendingChoices, setPendingChoices] = useState<PlayCardAction[] | null>(null);
   const [historyPlayerId, setHistoryPlayerId] = useState<number | null>(null);
+  const [botAnalysis, setBotAnalysis] = useState<BotAnalysis | null>(null);
+  const [isBotAnalysisOpen, setIsBotAnalysisOpen] = useState(false);
   const [tableCue, setTableCue] = useState<TableCue | null>(null);
   const [isSequencing, setIsSequencing] = useState(false);
   const sequenceInProgressRef = useRef(false);
@@ -1106,6 +1151,7 @@ export function App() {
     }
 
     const botAction = bot.chooseAction(botView, botActions);
+    setBotAnalysis(bot.getLastAnalysis());
     playActionWithSequence(state, botAction as PlayCardAction);
   }, [currentPlayer?.id, isSequencing, state]);
 
@@ -1153,6 +1199,8 @@ export function App() {
     setTableCue(null);
     setPendingChoices(null);
     setHistoryPlayerId(null);
+    setBotAnalysis(null);
+    setIsBotAnalysisOpen(false);
     botRef.current = createSimpleBot(createSeed());
     setState(createGame());
   }
@@ -1312,6 +1360,15 @@ export function App() {
             <button className="reset-button" onClick={handleResetGame} type="button">
               Reset
             </button>
+            <button
+              aria-label="Open bot thinking"
+              className="reset-button"
+              disabled={!botAnalysis}
+              onClick={() => setIsBotAnalysisOpen(true)}
+              type="button"
+            >
+              Bot brain
+            </button>
           </div>
 
           <div className="player-hand" aria-label="Your hand">
@@ -1426,6 +1483,119 @@ export function App() {
               ) : (
                 <p className="empty-copy">No cards played.</p>
               )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isBotAnalysisOpen && botAnalysis && (
+        <div className="overlay" role="presentation">
+          <section
+            aria-label="Bot thinking"
+            aria-modal="true"
+            className="bottom-sheet analysis-sheet"
+            role="dialog"
+          >
+            <div className="sheet-header">
+              <div>
+                <span className="zone-label">Latest decision</span>
+                <h2>Bot brain</h2>
+              </div>
+              <button
+                aria-label="Close bot thinking"
+                className="icon-button"
+                onClick={() => setIsBotAnalysisOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="analysis-scroll">
+              <div className="analysis-summary">
+                <span>
+                  <strong>{botAnalysis.sampledWorlds}</strong> worlds/action
+                </span>
+                <span>
+                  <strong>{botAnalysis.actions.length}</strong> actions
+                </span>
+                <span>
+                  <strong>{Math.round(botAnalysis.decisionMilliseconds)}</strong> ms
+                </span>
+              </div>
+
+              <section className="analysis-section">
+                <h3>Your estimated hand</h3>
+                <p className="analysis-model">
+                  Model: <strong>{botAnalysis.opponentModel.label}</strong>
+                </p>
+                {botAnalysis.ranges.length > 0 ? (
+                  botAnalysis.ranges.map((range) => (
+                    <div className="analysis-range" key={range.playerId}>
+                      <span className="analysis-range-meta">
+                        {range.source === "known" ? "Known exactly" : `Entropy ${range.entropy.toFixed(2)}`}
+                      </span>
+                      {range.cards.map((entry) => (
+                        <div className="analysis-range-row" key={entry.card}>
+                          <span>{entry.card}</span>
+                          <span className="analysis-range-track" aria-hidden="true">
+                            <i style={{ width: `${entry.probability * 100}%` }} />
+                          </span>
+                          <strong>{Math.round(entry.probability * 100)}%</strong>
+                        </div>
+                      ))}
+                      {range.evidence && (
+                        <p className="analysis-evidence">
+                          After you played {range.evidence.observedCard}: action fit if
+                          holding Handmaid {Math.round(
+                            (range.evidence.retainedCardLikelihoods.find(
+                              (entry) => entry.card === "Handmaid",
+                            )?.probability ?? 0) * 100,
+                          )}% · Baron {Math.round(
+                            (range.evidence.retainedCardLikelihoods.find(
+                              (entry) => entry.card === "Baron",
+                            )?.probability ?? 0) * 100,
+                          )}%
+                        </p>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty-copy">No active opponent range.</p>
+                )}
+              </section>
+
+              <section className="analysis-section">
+                <h3>Actions considered</h3>
+                <div className="analysis-actions">
+                  {[...botAnalysis.actions]
+                    .sort((left, right) => right.totalValue - left.totalValue)
+                    .map((entry) => {
+                      const chosen = Boolean(
+                        botAnalysis.chosenAction &&
+                          actionsMatch(entry.action, botAnalysis.chosenAction),
+                      );
+
+                      return (
+                        <div
+                          className={`analysis-action ${chosen ? "analysis-action-chosen" : ""}`}
+                          key={`${entry.action.card}-${entry.action.targetId ?? "self"}-${entry.action.guess ?? "none"}`}
+                        >
+                          <div>
+                            <strong>{formatAnalysisAction(entry.action)}</strong>
+                            {chosen && <em>Chosen</em>}
+                          </div>
+                          <span>
+                            strategy {Math.round(entry.strategyProbability * 100)}% · rollout {formatAnalysisValue(entry.rolloutValue)} · rules {formatAnalysisValue(entry.heuristicValue)}
+                          </span>
+                          <small>
+                            {formatRangeEvaluation(entry) ?? "range-aware"} · combined {formatAnalysisValue(entry.totalValue)}
+                          </small>
+                        </div>
+                      );
+                    })}
+                </div>
+              </section>
             </div>
           </section>
         </div>

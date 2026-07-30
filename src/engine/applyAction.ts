@@ -47,6 +47,7 @@ export function applyAction(state: GameState, action: PlayerAction): GameState {
         playerId: action.playerId,
         card: action.card,
         targetId: action.targetId,
+        guess: action.guess,
       },
     ],
   };

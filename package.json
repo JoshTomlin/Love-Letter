@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "benchmark:bot": "vite-node scripts/benchmarkBot.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

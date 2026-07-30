@@ -49,7 +49,13 @@ export type PublicPlayerState = {
 
 export type PublicGameEvent =
   | { type: "turn-started"; playerId: number }
-  | { type: "card-played"; playerId: number; card: Card; targetId?: number }
+  | {
+      type: "card-played";
+      playerId: number;
+      card: Card;
+      targetId?: number;
+      guess?: Exclude<Card, "Guard">;
+    }
   | { type: "player-eliminated"; playerId: number; reason: string }
   | { type: "token-awarded"; playerId: number }
   | { type: "round-ended"; winnerId: number; reason: string };
@@ -110,6 +116,8 @@ export type PlayerView = {
   cardsRemaining: number;
   currentPlayerIndex: number;
   phase: RoundPhase;
+  roundNumber: number;
+  ruleset: Ruleset;
   log: PublicGameEvent[];
 };
 

@@ -25,6 +25,13 @@ describe("applyAction", () => {
     expect(nextState.roundWinnerId).toBe(0);
     expect(nextState.players[1].eliminated).toBe(true);
     expect(nextState.players[0].tokens).toBe(1);
+    expect(nextState.log).toContainEqual({
+      type: "card-played",
+      playerId: 0,
+      card: "Guard",
+      targetId: 1,
+      guess: "Baron",
+    });
   });
 
   it("records a private reveal for Priest", () => {

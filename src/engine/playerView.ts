@@ -30,6 +30,8 @@ export function getPlayerView(state: GameState, playerIndex: number): PlayerView
     cardsRemaining: state.deck.length,
     currentPlayerIndex: state.currentPlayerIndex,
     phase: state.phase,
+    roundNumber: state.roundNumber,
+    ruleset: state.ruleset,
     log: state.log.filter(isPublicEvent),
   };
 }
