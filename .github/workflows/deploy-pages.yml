@@ -2,7 +2,7 @@ name: Deploy Love Letter
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:

@@ -231,7 +231,7 @@ separate explanation reconstructed afterwards.
 | Vite | Development server and production bundle | Provides a small React/TypeScript toolchain and emits a static `dist` directory. |
 | Vitest, Testing Library, and jsdom | Engine, bot, and accessible UI tests | Covers pure state transitions and user-visible behavior with the same TypeScript setup. |
 | Node.js | Development commands and tournament harness | Runs the real engine and bot outside the browser for repeatable benchmarks. |
-| GitHub Actions and Pages | Production build and hosting | Rebuilds and publishes the client-only application from `main` or `master`. |
+| GitHub Actions and Pages | Production build and hosting | Rebuilds and publishes the client-only application from `main`. |
 
 There is no backend, database, external API, or account system. Gameplay and
 analysis run entirely in the browser; Node.js is used only for development,

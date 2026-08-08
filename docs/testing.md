@@ -116,7 +116,7 @@ latency should all be reported when comparing later changes.
 ## CI and deployment
 
 [`deploy-pages.yml`](../.github/workflows/deploy-pages.yml) runs on pushes to
-`main` and `master`. It uses Node.js 22, installs the locked dependency set with
+`main`. It uses Node.js 22, installs the locked dependency set with
 `npm ci`, builds the production bundle, and deploys `dist` to GitHub Pages.
 
 The current workflow validates the production build but does not run
