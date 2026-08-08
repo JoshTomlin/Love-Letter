@@ -382,7 +382,7 @@ button:focus-visible {
   align-self: center;
 }
 
-.deck-area > span {
+.deck-area > .deck-count {
   position: absolute;
   right: -0.25rem;
   bottom: -0.25rem;

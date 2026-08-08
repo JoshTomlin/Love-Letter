@@ -24,6 +24,11 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Open bot discard history" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open your discard history" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open bot thinking" })).toBeDisabled();
+    expect(screen.getByLabelText("Draw deck: 10 cards remaining")).toBeInTheDocument();
+    expect(screen.getByLabelText("Face-down burn card")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Face-up removed cards").querySelectorAll(".card-face"),
+    ).toHaveLength(3);
   });
 
   it("finishes the opening draw when Strict Mode replays effects", async () => {

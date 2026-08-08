@@ -72,10 +72,19 @@ body { overscroll-behavior: none; }
 .pile-stack .pile-copy { min-width: 0; color: #f8f2e8; font-size: .58rem; line-height: 1.05; white-space: normal; }
 .pile-stack .pile-count { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; border-radius: 999px; background: #e4c57a; color: #172d33; font-size: .65rem; font-weight: 700; }
 .pile-stack-receiving { animation: pile-receive 700ms ease-in-out 2 alternate; border-color: rgba(245,200,75,.8); }
+.deck-label, .burn-label { position: absolute; z-index: 2; top: -.9rem; left: 50%; color: #e4c57a; font-size: .6rem; text-transform: uppercase; transform: translateX(-50%); white-space: nowrap; }
 .burn-area { grid-area: burn; position: relative; align-self: center; width: 100%; }
 .burn-area > .card-back { width: 100%; height: auto; }
-.burn-label { position: absolute; z-index: 2; top: -.9rem; left: 50%; color: #e4c57a; font-size: .6rem; text-transform: uppercase; transform: translateX(-50%); }
 .burn-empty { display: grid; place-items: center; width: 100%; aspect-ratio: 5 / 7; border: 1px dashed rgba(248,242,232,.25); border-radius: 8px; color: rgba(248,242,232,.58); font-size: .62rem; }
+.visible-burn-area { grid-area: removed; display: flex; gap: .45rem; align-items: center; justify-content: center; min-width: 0; }
+.visible-burn-label { flex: 0 0 auto; color: #e4c57a; font-size: .58rem; text-transform: uppercase; }
+.visible-burn-cards { display: flex; gap: .28rem; align-items: center; }
+.visible-burn-card { width: 2rem; aspect-ratio: 5 / 7; }
+.visible-burn-card > .card-face { width: 100%; height: 100%; min-height: 0; gap: .05rem; padding: .1rem; border-radius: 4px; box-shadow: 0 .2rem .35rem rgba(2,8,10,.3); }
+.visible-burn-card .card-face::before { inset: .08rem; border-radius: 3px; }
+.visible-burn-card .card-corner { width: .72rem; height: .72rem; font-size: .46rem; }
+.visible-burn-card .card-illustration, .visible-burn-card .card-text { display: none; }
+.visible-burn-card .card-name { font-size: .4rem; line-height: 1; }
 @media (min-width: 0px) {
   .game-shell { display: grid; grid-template-rows: auto minmax(0,1fr); width: min(100%,430px); height: 100vh; height: 100dvh; min-height: 0; padding: calc(.35rem + env(safe-area-inset-top)) .55rem calc(.4rem + env(safe-area-inset-bottom)); overflow: hidden; }
   .score-bar { min-height: 2.6rem; margin: 0; }
@@ -103,9 +112,9 @@ body { overscroll-behavior: none; }
   .card-back-frame span { width: clamp(1.7rem,8vmin,2.7rem); height: clamp(1.7rem,8vmin,2.7rem); font-size: clamp(.68rem,3vmin,.95rem); }
   .pile-stack.pile-stack-visual { min-width: 7.4rem; max-width: 7.4rem; min-height: 2.9rem; padding: .22rem .3rem; }
   .pile-stack strong { font-size: .68rem; }
-  .center-table { grid-template-columns: 4.15rem minmax(0,1fr) 4.15rem; grid-template-rows: minmax(0,1fr) auto; grid-template-areas: "deck stage burn" "prompt prompt prompt"; gap: .35rem; align-items: center; align-content: stretch; padding: .18rem 0; }
+  .center-table { grid-template-columns: 4.15rem minmax(0,1fr) 4.15rem; grid-template-rows: minmax(0,1fr) auto auto; grid-template-areas: "deck stage burn" "removed removed removed" "prompt prompt prompt"; gap: .35rem; align-items: center; align-content: stretch; padding: .18rem 0; }
   .deck-area > .card-back { height: auto; }
-  .deck-area > span { width: 1.45rem; height: 1.45rem; font-size: .72rem; }
+  .deck-area > .deck-count { width: 1.45rem; height: 1.45rem; font-size: .72rem; }
   .turn-stage { grid-template-columns: minmax(4.2rem,5.25rem) minmax(0,1fr); gap: .35rem; width: 100%; height: 100%; min-height: 0; padding: .1rem; }
   .turn-stage .stage-label { align-self: end; }
   .turn-stage .card-face, .turn-stage .card-back, .turn-stage .empty-stage { align-self: center; width: 100%; height: auto; min-height: 0; max-height: 8.2rem; }
@@ -126,6 +135,9 @@ body { overscroll-behavior: none; }
   .table-surface { gap: .2rem; }
   .zone-row, .player-tools { min-height: 1.7rem; }
   .center-table { grid-template-columns: 3.7rem minmax(0,1fr) 3.7rem; }
+  .visible-burn-card { width: 1.65rem; }
+  .visible-burn-area { gap: .3rem; }
+  .visible-burn-cards { gap: .2rem; }
   .prompt-panel { min-height: 2rem; padding-block: .22rem; }
 }`;
 
@@ -1275,9 +1287,13 @@ export function App() {
         </section>
 
         <section className="center-table" aria-label="Table">
-          <div className="deck-area">
+          <div
+            aria-label={`Draw deck: ${view.cardsRemaining} cards remaining`}
+            className="deck-area"
+          >
+            <span className="deck-label">Deck</span>
             <CardBack stacked />
-            <span>{view.cardsRemaining}</span>
+            <span className="deck-count">{view.cardsRemaining}</span>
             {tableCue?.kind === "draw" && (
               <div
                 className={`draw-runner ${
@@ -1290,10 +1306,27 @@ export function App() {
             )}
           </div>
 
-          <div className="burn-area" aria-label="Burn card">
-            <span className="burn-label">Burn</span>
+          <div className="burn-area" aria-label="Face-down burn card">
+            <span className="burn-label">Face-down</span>
             {state.burnedCard ? <CardBack /> : <div className="burn-empty">Used</div>}
           </div>
+
+          {view.visibleBurnedCards.length > 0 && (
+            <div className="visible-burn-area" aria-label="Face-up removed cards">
+              <span className="visible-burn-label">Face-up removals</span>
+              <div className="visible-burn-cards">
+                {view.visibleBurnedCards.map((card, index) => (
+                  <div
+                    aria-label={`Removed card ${index + 1}: ${card}`}
+                    className="visible-burn-card"
+                    key={`visible-burn-${index}-${card}`}
+                  >
+                    <CardFace card={card} size="small" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div
             className={`turn-stage turn-stage-${tableCue?.kind ?? "idle"} turn-stage-${tableCueTone}`}
