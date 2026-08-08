@@ -51,7 +51,7 @@ export function inferOpponentRanges(
   return inferOpponentRangesFromView(view, true, opponentModel);
 }
 
-~export function updateOpponentRanges(
+export function updateOpponentRanges(
   previousView: PlayerView | null,
   previousRanges: OpponentRange[],
   currentView: PlayerView,

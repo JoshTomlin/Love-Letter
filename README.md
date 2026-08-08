@@ -1,98 +1,132 @@
 # Love Letter
 
-Standalone Love Letter web app with three explicit layers:
+A browser implementation of the classic Love Letter card game, built around a
+bot that has to reason with the same incomplete information as a human player.
 
-- `src/engine`: pure game rules and state transitions
-- `src/bots`: strategy implementations that only operate on player views
-- `src/app`: React UI shell
+The app is a complete two-player game. The rules engine is deterministic, the
+bot maintains a weighted range of possible opponent cards, and the interface
+can show the reasoning behind the bot's latest decision.
 
-## First principles
+## Why this project exists
 
-- The engine is deterministic and UI-agnostic.
-- Bots should never receive full hidden state.
-- The UI submits player intents and renders engine events.
+Love Letter has a small deck and simple rules, but choosing a strong move is not
+straightforward. Most of the state is hidden, and each public action changes
+what the other player is likely to hold.
 
-## Bot strategy
+This project explores that problem through:
 
-The default bot combines explicit hidden-information reasoning with Monte Carlo
-simulation:
-
-- `src/bots/beliefState.ts` removes every visible card from the classic deck,
-  builds a normalized range for each opponent, and collapses that range when a
-  Priest reveal or King swap provides exact knowledge.
-- Public choices update a persistent retained-card range with a Bayesian action
-  model. The default human-tendency profile expects players to use Handmaid
-  readily and avoid Baron: passing up Handmaid discounts it from the retained
-  range, while passing up Baron increases its probability. A noise floor allows
-  surprising human choices, and forced Countess combinations remain strong
-  evidence.
-- The belief state samples complete hands, deck orders, and the hidden burn card
-  that are consistent with the acting player's `PlayerView`.
-- `src/bots/randomBot.ts` evaluates every legal action across the same sampled
-  worlds and rolls each world to the end of the round. Simulated players also act
-  only through their own `PlayerView`, so rollouts cannot inspect cards that the
-  player would not know.
-- Guard hit rate, Baron win/tie/loss rate, Prince Princess probability, King
-  exchange value, and Priest information value are calculated directly from the
-  opponent range and used alongside rollout results.
-
-`createBeliefBot` accepts a rollout budget and per-action sample bounds for
-strength/performance tuning. Its `getLastAnalysis()` method exposes the ranges
-and action values from the most recent decision for diagnostics.
-
-The bot uses a softmax mixed policy for close estimated values, which makes the
-strategy less predictable in the same spirit as poker mixing. This is
-GTO-inspired rather than a proven Nash equilibrium: the human-tendency profile
-is deliberately exploitative. A true GTO claim would require solving the full
-imperfect-information game through self-play (for example, CFR) and measuring
-exploitability against a best response.
-
-### Inspecting a decision
-
-After the bot has taken its first turn, select **Bot brain** beside Reset. The
-inspector shows its estimated range for your hand, the behavioral model and
-latest action evidence, uncertainty, the number of sampled worlds, decision
-time, every action's hand-vs-range result, its mixed-strategy frequency, and
-which action it selected. The percentages are beliefs rather than a reveal of
-the actual hidden card.
-
-### Benchmarking
-
-Run the paired-seat tournament harness with:
-
-```bash
-npm run benchmark:bot
-```
-
-It compares the belief bot against uniform random play and the same range
-heuristic with rollouts disabled. Results include round win rate with a 95%
-confidence interval, average and p95 decision latency, worlds sampled per
-decision, and total rollouts.
-
-The default is 100 rounds and a 1,024-rollout budget. Override the inputs with
-`ROUNDS`, `ROLLOUT_BUDGET`, and `SEED`. Set `OPPONENT` to `random`, `range`, or
-`human` to run only one baseline. Set `BELIEF_MODEL=balanced` to disable the
-human-tendency assumptions for an A/B comparison. For example, in PowerShell:
-
-```powershell
-$env:ROUNDS=500
-$env:ROLLOUT_BUDGET=2048
-$env:SEED=1
-npm run benchmark:bot
-```
-
-Use several hundred rounds when comparing strategy changes; short runs are
-useful for smoke testing but have wide confidence intervals.
-
-## Getting started
-
-```bash
-npm install
-npm run dev
-```
+- a standalone game engine with explicit state transitions;
+- a strict information boundary between the engine and the bot;
+- Bayesian range updates based on visible cards and observed play;
+- Monte Carlo sampling of hidden states consistent with the bot's knowledge;
+- reproducible benchmarks for strength and decision latency; and
+- an in-game inspector that makes the bot's estimates and action scores visible.
 
 ## Current scope
 
-The browser UI is a complete classic two-player game against the belief bot.
-The engine and bot data structures support classic two-, three-, and four-player
-rulesets, while multiplayer UI work remains future scope.
+- Complete classic two-player game in the browser
+- All eight card effects, round scoring, and the seven-token win condition
+- Responsive interface with turn and card-resolution animations
+- Range-aware bot with optional Monte Carlo rollouts
+- Human-tendency and neutral opponent models
+- Automated engine, bot, and UI tests
+- GitHub Pages deployment on pushes to `main` or `master`
+
+The engine can initialise classic two-, three-, and four-player rulesets. The
+current browser experience is intentionally limited to a human playing against
+one bot.
+
+## How the bot works
+
+The bot never receives the real hidden game state. It receives a `PlayerView`
+containing its own cards, public events, visible discards, and any cards it has
+legitimately learned through play.
+
+From that view it:
+
+1. removes known cards from the deck and builds an opponent range;
+2. updates that range using the opponent's public choices;
+3. evaluates card-specific outcomes such as Guard hit rate or Baron equity;
+4. samples complete hidden states that match everything it can see;
+5. rolls candidate actions forward to the end of the round; and
+6. mixes between close actions instead of always making a deterministic choice.
+
+Select **Bot brain** during a game to inspect the latest range, behavioral
+evidence, action values, mixed-strategy probabilities, sample count, and
+decision time.
+
+The strategy is GTO-inspired, not a solved equilibrium. The human-tendency
+model is deliberately exploitative, while a true GTO claim would require a
+self-play solver and a measured exploitability bound.
+
+## Languages
+
+| Language | Where it is used | Why it is used |
+| --- | --- | --- |
+| TypeScript | Game engine, bot, benchmark harness, and tests | Discriminated unions make cards, actions, phases, and public/private events explicit. Strict checking catches invalid state handling early. |
+| TSX | React components and UI tests | Keeps rendering logic and its types together while supporting accessible component testing. |
+| CSS | Table layout, card styling, responsive behavior, and animations | The visual layer stays independent of the engine and does not require a component styling dependency. |
+| HTML | Minimal browser entry point | Vite only needs a small document shell; the application is rendered by React. |
+
+There is no backend, database, or external API. The game runs entirely in the
+browser; Node.js is used for development, testing, builds, and benchmarks.
+
+## Main tools
+
+| Tool | Role |
+| --- | --- |
+| React 18 | Browser interface and local UI state |
+| Vite | Development server and production bundling |
+| Vitest | Unit and integration test runner |
+| Testing Library + jsdom | Interaction-focused React tests without a real browser |
+| GitHub Actions + Pages | Production build and static hosting |
+
+## Project structure
+
+```text
+src/
+  engine/     Rules, state transitions, views, and seeded setup
+  bots/       Range inference, opponent models, and action selection
+  app/        React interface, animations, and Bot brain inspector
+  shared/     Shared test setup
+scripts/
+  benchmarkBot.ts
+docs/
+  architecture.md
+  bot-strategy.md
+  testing.md
+```
+
+The main design rule is that dependencies point inward: the UI and bots use the
+engine, while the engine knows nothing about React or any particular strategy.
+
+## Run locally
+
+Node.js 18 or later is required.
+
+```bash
+npm ci
+npm run dev
+```
+
+Vite prints the local URL when the development server starts.
+
+## Useful commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm test` | Run the complete test suite once |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run build` | Type-check and create the production bundle |
+| `npm run preview` | Serve the production bundle locally |
+| `npm run benchmark:bot` | Run the seeded bot tournament harness |
+
+## Documentation
+
+- [Architecture](docs/architecture.md) explains the engine boundaries, state
+  flow, information model, and source layout.
+- [Bot strategy](docs/bot-strategy.md) covers range construction, Bayesian
+  updates, sampling, rollouts, mixed play, and current limitations.
+- [Testing and benchmarks](docs/testing.md) describes the test coverage,
+  benchmark opponents, configuration, metrics, and CI/CD workflow.
